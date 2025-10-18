@@ -1,230 +1,163 @@
 # Fiifi Pet Adoption Auto Discovery Project - Vault-Jenkins Infrastructure
 # Main Terraform configuration for eu-west-3 region
 
-terraform {
-  required_version = ">= 1.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-# Configure the AWS Provider
-provider "aws" {
-  region = var.aws_region
-  
-  default_tags {
-    tags = {
-      Project     = "Fiifi-Pet-Adoption-Auto-Discovery"
-      Environment = var.environment
-      Owner       = "fiifiquaison1"
-      ManagedBy   = "Terraform"
-      CreatedDate = timestamp()
-    }
-  }
-}
-
-# Data sources
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-data "aws_ami" "redhat" {
-  most_recent = true
-  owners      = ["309956199498"] # Red Hat
-  
-  filter {
-    name   = "name"
-    values = ["RHEL-9*-x86_64-*"]
-  }
-  
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-}
-
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-  
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-  
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-}
-
-# Data source for existing Route53 hosted zone (if it exists)
-data "aws_route53_zone" "domain" {
-  count = var.create_route53_zone ? 0 : 1
-  name  = var.domain_name
-}
-
-# Create Route53 hosted zone (if requested)
-resource "aws_route53_zone" "domain" {
-  count = var.create_route53_zone ? 1 : 0
-  name  = var.domain_name
-  
-  tags = {
-    Name = "${var.project_name}-zone"
-  }
+locals {
+  name = "fiifi-pet-adoption-auto-discovery"
 }
 
 # VPC
-resource "aws_vpc" "pet_adoption_vpc" {
-  cidr_block           = var.vpc_cidr
+resource "aws_vpc" "vpc" {
+  cidr_block           = "10.0.0.0/16"
+  instance_tenancy     = "default"
   enable_dns_hostnames = true
   enable_dns_support   = true
-  
+
   tags = {
-    Name = "${var.project_name}-vpc"
+    Name = "${local.name}-vpc"
   }
 }
 
-# Internet Gateway
-resource "aws_internet_gateway" "pet_adoption_igw" {
-  vpc_id = aws_vpc.pet_adoption_vpc.id
-  
-  tags = {
-    Name = "${var.project_name}-igw"
-  }
-}
-
-# Public Subnets
-resource "aws_subnet" "public_subnets" {
-  count             = length(var.public_subnet_cidrs)
-  vpc_id            = aws_vpc.pet_adoption_vpc.id
-  cidr_block        = var.public_subnet_cidrs[count.index]
-  availability_zone = data.aws_availability_zones.available.names[count.index]
-  
+# Create public subnet 1
+resource "aws_subnet" "pub_sub" {
+  vpc_id                  = aws_vpc.vpc.id
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "eu-west-3a"
   map_public_ip_on_launch = true
-  
+
   tags = {
-    Name = "${var.project_name}-public-subnet-${count.index + 1}"
+    Name = "${local.name}-pub-sub"
     Type = "Public"
   }
 }
 
-# Private Subnets
-resource "aws_subnet" "private_subnets" {
-  count             = length(var.private_subnet_cidrs)
-  vpc_id            = aws_vpc.pet_adoption_vpc.id
-  cidr_block        = var.private_subnet_cidrs[count.index]
-  availability_zone = data.aws_availability_zones.available.names[count.index]
-  
+# Create internet gateway
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.vpc.id
+
   tags = {
-    Name = "${var.project_name}-private-subnet-${count.index + 1}"
-    Type = "Private"
+    Name = "${local.name}-igw"
   }
 }
 
-# Route Table for Public Subnets
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.pet_adoption_vpc.id
-  
+# Create route table for public subnet
+resource "aws_route_table" "pub_rt" {
+  vpc_id = aws_vpc.vpc.id
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.pet_adoption_igw.id
+    gateway_id = aws_internet_gateway.igw.id
   }
-  
   tags = {
-    Name = "${var.project_name}-public-rt"
+    Name = "${local.name}-pub-rt"
   }
 }
 
-# Route Table Associations for Public Subnets
-resource "aws_route_table_association" "public_rta" {
-  count          = length(aws_subnet.public_subnets)
-  subnet_id      = aws_subnet.public_subnets[count.index].id
-  route_table_id = aws_route_table.public_rt.id
+# Creating route table association for public_subnet_1
+resource "aws_route_table_association" "ass-public_subnet" {
+  subnet_id      = aws_subnet.pub_sub.id
+  route_table_id = aws_route_table.pub_rt.id
 }
 
-# NAT Gateway
-resource "aws_eip" "nat_eip" {
-  domain = "vpc"
-  
+# Create keypair resource
+resource "tls_private_key" "keypair" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "local_file" "private_key" {
+  content         = tls_private_key.keypair.private_key_pem
+  filename        = "${local.name}-key.pem"
+  file_permission = "400"
+}
+
+resource "aws_key_pair" "public_key" {
+  key_name   = "${local.name}-key"
+  public_key = tls_private_key.keypair.public_key_openssh
+
   tags = {
-    Name = "${var.project_name}-nat-eip"
+    Name = "${local.name}-key"
   }
-  
-  depends_on = [aws_internet_gateway.pet_adoption_igw]
 }
 
-resource "aws_nat_gateway" "nat_gw" {
-  allocation_id = aws_eip.nat_eip.id
-  subnet_id     = aws_subnet.public_subnets[0].id
-  
+# Data source to get the latest RedHat AMI
+data "aws_ami" "redhat" {
+  most_recent = true
+  owners      = ["309956199498"] # RedHat's owner ID
+  filter {
+    name   = "name"
+    values = ["RHEL-9*"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+# Create IAM role for Jenkins server to assume SSM role
+resource "aws_iam_role" "ssm-jenkins-role" {
+  name = "${local.name}-ssm-jenkins-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
   tags = {
-    Name = "${var.project_name}-nat-gw"
-  }
-  
-  depends_on = [aws_internet_gateway.pet_adoption_igw]
-}
-
-# Route Table for Private Subnets
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.pet_adoption_vpc.id
-  
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat_gw.id
-  }
-  
-  tags = {
-    Name = "${var.project_name}-private-rt"
+    Name = "${local.name}-ssm-jenkins-role"
   }
 }
 
-# Route Table Associations for Private Subnets
-resource "aws_route_table_association" "private_rta" {
-  count          = length(aws_subnet.private_subnets)
-  subnet_id      = aws_subnet.private_subnets[count.index].id
-  route_table_id = aws_route_table.private_rt.id
+# Attach AmazonSSMManaged policy to JENKINS IAM role
+resource "aws_iam_role_policy_attachment" "jenkins_ssm_managed_instance_core" {
+  role       = aws_iam_role.ssm-jenkins-role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Security Group for Jenkins
+# Attach ADMINISTRATOR ACCESS policy to the role
+resource "aws_iam_role_policy_attachment" "jenkins-admin-role-attachment" {
+  role       = aws_iam_role.ssm-jenkins-role.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+# CREATE INSTANCE PROFILE FOR JENKINS SERVER
+resource "aws_iam_instance_profile" "ssm_instance_profile" {
+  name = "${local.name}-ssm-jenkins-profile"
+  role = aws_iam_role.ssm-jenkins-role.name
+}
+
+# Create jenkins security group
 resource "aws_security_group" "jenkins_sg" {
-  name_prefix = "${var.project_name}-jenkins-"
-  vpc_id      = aws_vpc.pet_adoption_vpc.id
-  
-  description = "Security group for Jenkins server"
-  
-  # SSH access
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_ssh_cidrs
-    description = "SSH access"
-  }
-  
-  # Jenkins web interface
+  name        = "${local.name}-jenkins-sg"
+  description = "Allow SSH and Jenkins access"
+  vpc_id      = aws_vpc.vpc.id
+
   ingress {
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = var.allowed_web_cidrs
+    cidr_blocks = ["0.0.0.0/0"]
     description = "Jenkins web interface"
   }
-  
-  # Outbound internet access
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "SSH access"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -232,47 +165,268 @@ resource "aws_security_group" "jenkins_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "All outbound traffic"
   }
-  
+
   tags = {
-    Name = "${var.project_name}-jenkins-sg"
+    Name = "${local.name}-jenkins-sg"
   }
 }
 
-# Security Group for Vault
+# Jenkins EC2 Instance
+resource "aws_instance" "jenkins-server" {
+  ami                         = data.aws_ami.redhat.id
+  instance_type               = "t3.medium"
+  key_name                    = aws_key_pair.public_key.id
+  associate_public_ip_address = true
+  subnet_id                   = aws_subnet.pub_sub.id
+  vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
+  iam_instance_profile        = aws_iam_instance_profile.ssm_instance_profile.name
+
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+    encrypted   = true
+
+    tags = {
+      Name = "${local.name}-jenkins-root"
+    }
+  }
+
+  user_data = base64encode(file("./jenkins-userdata.sh"))
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  tags = {
+    Name        = "${local.name}-jenkins-server"
+    Type        = "Jenkins-Server"
+    OS          = "RedHat"
+    Environment = var.environment
+    Role        = "CI/CD-Server"
+  }
+}
+
+# Create Route53 hosted zone for the domain
+resource "aws_route53_zone" "fiifi_zone" {
+  name = var.domain_name
+
+  tags = {
+    Name = "${local.name}-hosted-zone"
+  }
+}
+
+# Create ACM certificate with DNS validation
+resource "aws_acm_certificate" "fiifi_acm_cert" {
+  domain_name               = var.domain_name
+  subject_alternative_names = ["*.${var.domain_name}"]
+  validation_method         = "DNS"
+  
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name = "${local.name}-acm-cert"
+  }
+}
+
+# Fetch DNS Validation Records for ACM Certificate
+resource "aws_route53_record" "acm_validation_record" {
+  for_each = {
+    for dvo in aws_acm_certificate.fiifi_acm_cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  # Create DNS Validation Record for ACM Certificate
+  zone_id         = aws_route53_zone.fiifi_zone.zone_id
+  allow_overwrite = true
+  name            = each.value.name
+  type            = each.value.type
+  ttl             = 60
+  records         = [each.value.record]
+  depends_on      = [aws_acm_certificate.fiifi_acm_cert]
+}
+
+# Validate the ACM Certificate after DNS Record Creation
+resource "aws_acm_certificate_validation" "fiifi_cert_validation" {
+  certificate_arn         = aws_acm_certificate.fiifi_acm_cert.arn
+  validation_record_fqdns = [for record in aws_route53_record.acm_validation_record : record.fqdn]
+  depends_on              = [aws_acm_certificate.fiifi_acm_cert]
+}
+
+# Create Security group for the jenkins elb
+resource "aws_security_group" "jenkins-elb-sg" {
+  name        = "${local.name}-jenkins-elb-sg"
+  description = "Allow HTTPS for Jenkins ELB"
+  vpc_id      = aws_vpc.vpc.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS access"
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP access"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "All outbound traffic"
+  }
+
+  tags = {
+    Name = "${local.name}-jenkins-elb-sg"
+  }
+}
+
+# Create elastic Load Balancer for Jenkins
+resource "aws_elb" "elb_jenkins" {
+  name            = "fiifi-pet-adoption-jenkins-elb"
+  security_groups = [aws_security_group.jenkins-elb-sg.id]
+  subnets         = [aws_subnet.pub_sub.id]
+
+  listener {
+    instance_port     = 8080
+    instance_protocol = "HTTP"
+    lb_port           = 80
+    lb_protocol       = "HTTP"
+  }
+
+  listener {
+    instance_port      = 8080
+    instance_protocol  = "HTTP"
+    lb_port            = 443
+    lb_protocol        = "HTTPS"
+    ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
+  }
+
+  health_check {
+    healthy_threshold   = 3
+    unhealthy_threshold = 2
+    interval            = 30
+    timeout             = 5
+    target              = "TCP:8080"
+  }
+
+  instances                   = [aws_instance.jenkins-server.id]
+  cross_zone_load_balancing   = true
+  idle_timeout                = 400
+  connection_draining         = true
+  connection_draining_timeout = 400
+
+  tags = {
+    Name = "${local.name}-jenkins-elb"
+  }
+}
+
+# Data source to get the latest Ubuntu AMI
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+# Create KMS key to manage vault unseal keys
+resource "aws_kms_key" "vault" {
+  description             = "KMS key for Fiifi Pet Adoption Auto Discovery Vault"
+  enable_key_rotation     = true
+  deletion_window_in_days = 20
+
+  tags = {
+    Name = "${local.name}-vault-kms-key"
+  }
+}
+
+# Create a vault server
+resource "aws_instance" "vault" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = "t2.medium"
+  subnet_id                   = aws_subnet.pub_sub.id
+  vpc_security_group_ids      = [aws_security_group.vault_sg.id]
+  key_name                    = aws_key_pair.public_key.key_name
+  associate_public_ip_address = true
+  iam_instance_profile        = aws_iam_instance_profile.vault_ssm_profile.name
+
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+    encrypted   = true
+
+    tags = {
+      Name = "${local.name}-vault-root"
+    }
+  }
+
+  # User data script to install Vault and required tools
+  user_data = templatefile("./vault-userdata.sh", {
+    region        = var.aws_region,
+    VAULT_VERSION = "1.18.3",
+    key           = aws_kms_key.vault.id
+  })
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  # Tag the instance for easy identification
+  tags = {
+    Name        = "${local.name}-vault-server"
+    Type        = "Vault-Server"
+    OS          = "Ubuntu"
+    Environment = var.environment
+    Role        = "Secrets-Management"
+  }
+}
+
+# Security Group for Vault server
 resource "aws_security_group" "vault_sg" {
-  name_prefix = "${var.project_name}-vault-"
-  vpc_id      = aws_vpc.pet_adoption_vpc.id
-  
-  description = "Security group for Vault server"
-  
+  name        = "${local.name}-vault-sg"
+  description = "Allow Vault traffic"
+  vpc_id      = aws_vpc.vpc.id
+
+  # Vault API and UI
+  ingress {
+    from_port   = 8200
+    to_port     = 8200
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Vault API and UI"
+  }
+
   # SSH access
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = var.allowed_ssh_cidrs
+    cidr_blocks = ["0.0.0.0/0"]
     description = "SSH access"
   }
-  
-  # Vault API
-  ingress {
-    from_port   = 8200
-    to_port     = 8200
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-    description = "Vault API and UI from VPC"
-  }
-  
-  # Vault cluster communication
-  ingress {
-    from_port = 8201
-    to_port   = 8201
-    protocol  = "tcp"
-    self      = true
-    description = "Vault cluster communication"
-  }
-  
-  # Outbound internet access
+
+  # Outbound: Allow all traffic
   egress {
     from_port   = 0
     to_port     = 0
@@ -280,390 +434,167 @@ resource "aws_security_group" "vault_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "All outbound traffic"
   }
-  
+
   tags = {
-    Name = "${var.project_name}-vault-sg"
+    Name = "${local.name}-vault-sg"
   }
 }
 
-# IAM Role for Jenkins
-resource "aws_iam_role" "jenkins_role" {
-  name = "${var.project_name}-jenkins-role"
-  
+# Creating and attaching an IAM role with SSM permissions to the vault instance
+resource "aws_iam_role" "vault_ssm_role" {
+  name = "${local.name}-ssm-vault-role"
+
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      },
+      Action = "sts:AssumeRole"
+    }]
   })
-  
+
   tags = {
-    Name = "${var.project_name}-jenkins-role"
+    Name = "${local.name}-ssm-vault-role"
   }
 }
 
-# IAM Policy for Jenkins
-resource "aws_iam_role_policy" "jenkins_policy" {
-  name = "${var.project_name}-jenkins-policy"
-  role = aws_iam_role.jenkins_role.id
-  
+# Create IAM role policy to give permission to the KMS role
+resource "aws_iam_role_policy" "kms_policy" {
+  name = "${local.name}-kms-policy"
+  role = aws_iam_role.vault_ssm_role.id
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
         Action = [
-          "s3:*",
-          "ec2:Describe*",
-          "ec2:CreateTags",
-          "iam:PassRole",
-          "iam:ListRoles",
-          "iam:ListInstanceProfiles",
-          "ssm:GetParameter",
-          "ssm:GetParameters",
-          "ssm:PutParameter",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:CreateSecret",
-          "secretsmanager:UpdateSecret"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-# IAM Instance Profile for Jenkins
-resource "aws_iam_instance_profile" "jenkins_profile" {
-  name = "${var.project_name}-jenkins-profile"
-  role = aws_iam_role.jenkins_role.name
-}
-
-# IAM Role for Vault
-resource "aws_iam_role" "vault_role" {
-  name = "${var.project_name}-vault-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-  
-  tags = {
-    Name = "${var.project_name}-vault-role"
-  }
-}
-
-# IAM Policy for Vault
-resource "aws_iam_role_policy" "vault_policy" {
-  name = "${var.project_name}-vault-policy"
-  role = aws_iam_role.vault_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ec2:DescribeInstances",
-          "iam:GetRole",
-          "iam:GetUser",
-          "sts:GetCallerIdentity",
+          "kms:Encrypt",
           "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDatakey*",
           "kms:DescribeKey"
-        ]
-        Resource = "*"
+        ],
+        Effect   = "Allow"
+        Resource = aws_kms_key.vault.arn
       }
     ]
   })
 }
 
-# IAM Instance Profile for Vault
-resource "aws_iam_instance_profile" "vault_profile" {
-  name = "${var.project_name}-vault-profile"
-  role = aws_iam_role.vault_role.name
+# Attach the AmazonSSMManagedInstanceCore policy
+resource "aws_iam_role_policy_attachment" "vault_ssm_attachment" {
+  role       = aws_iam_role.vault_ssm_role.id
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Key Pair
-resource "aws_key_pair" "pet_adoption_key" {
-  key_name   = "${var.project_name}-key"
-  public_key = var.public_key
-  
+# Create instance profile for vault
+resource "aws_iam_instance_profile" "vault_ssm_profile" {
+  name = "${local.name}-ssm-vault-instance-profile"
+  role = aws_iam_role.vault_ssm_role.id
+}
+
+# Security Group for Vault ELB
+resource "aws_security_group" "vault_elb_sg" {
+  name        = "${local.name}-vault-elb-sg"
+  description = "Allow HTTPS traffic for Vault ELB"
+  vpc_id      = aws_vpc.vpc.id
+
+  # HTTPS access
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS access"
+  }
+
+  # HTTP access
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP access"
+  }
+
+  # Outbound: Allow all traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "All outbound traffic"
+  }
+
   tags = {
-    Name = "${var.project_name}-key"
+    Name = "${local.name}-vault-elb-sg"
   }
 }
 
-# Jenkins EC2 Instance (Red Hat)
-resource "aws_instance" "jenkins" {
-  ami                     = data.aws_ami.redhat.id
-  instance_type           = var.jenkins_instance_type
-  key_name                = aws_key_pair.pet_adoption_key.key_name
-  vpc_security_group_ids  = [aws_security_group.jenkins_sg.id]
-  subnet_id               = aws_subnet.public_subnets[0].id
-  iam_instance_profile    = aws_iam_instance_profile.jenkins_profile.name
-  
-  user_data = base64encode(file("${path.module}/jenkins-userdata.sh"))
-  
-  root_block_device {
-    volume_type           = "gp3"
-    volume_size           = var.jenkins_root_volume_size
-    delete_on_termination = true
-    encrypted             = true
-    
-    tags = {
-      Name = "${var.project_name}-jenkins-root"
-    }
-  }
-  
-  tags = {
-    Name = "${var.project_name}-jenkins"
-    Type = "Jenkins-Server"
-    OS   = "RedHat"
-  }
-}
+# Create a new load balancer for vault
+resource "aws_elb" "vault_elb" {
+  name            = "fiifi-pet-adoption-vault-elb"
+  subnets         = [aws_subnet.pub_sub.id]
+  security_groups = [aws_security_group.vault_elb_sg.id]
 
-# Vault EC2 Instance (Ubuntu)
-resource "aws_instance" "vault" {
-  ami                     = data.aws_ami.ubuntu.id
-  instance_type           = var.vault_instance_type
-  key_name                = aws_key_pair.pet_adoption_key.key_name
-  vpc_security_group_ids  = [aws_security_group.vault_sg.id]
-  subnet_id               = aws_subnet.private_subnets[0].id
-  iam_instance_profile    = aws_iam_instance_profile.vault_profile.name
-  
-  user_data = base64encode(file("${path.module}/vault-userdata.sh"))
-  
-  root_block_device {
-    volume_type           = "gp3"
-    volume_size           = var.vault_root_volume_size
-    delete_on_termination = true
-    encrypted             = true
-    
-    tags = {
-      Name = "${var.project_name}-vault-root"
-    }
+  listener {
+    instance_port     = 8200
+    instance_protocol = "HTTP"
+    lb_port           = 80
+    lb_protocol       = "HTTP"
   }
-  
-  tags = {
-    Name = "${var.project_name}-vault"
-    Type = "Vault-Server"
-    OS   = "Ubuntu"
-  }
-}
 
-# Application Load Balancer for Jenkins
-resource "aws_lb" "jenkins_alb" {
-  name               = "fiifi-pet-adoption-jenkins-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.jenkins_sg.id]
-  subnets            = aws_subnet.public_subnets[*].id
-  
-  enable_deletion_protection = false
-  
-  tags = {
-    Name = "${var.project_name}-jenkins-alb"
+  listener {
+    instance_port      = 8200
+    instance_protocol  = "HTTP"
+    lb_port            = 443
+    lb_protocol        = "HTTPS"
+    ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
   }
-}
 
-# Target Group for Jenkins
-resource "aws_lb_target_group" "jenkins_tg" {
-  name     = "fiifi-pet-adoption-jenkins-tg"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.pet_adoption_vpc.id
-  
   health_check {
-    enabled             = true
     healthy_threshold   = 2
     unhealthy_threshold = 2
-    timeout             = 5
+    timeout             = 3
+    target              = "TCP:8200"
     interval            = 30
-    path                = "/login"
-    matcher             = "200"
-    port                = "traffic-port"
-    protocol            = "HTTP"
   }
-  
+
+  instances                   = [aws_instance.vault.id]
+  cross_zone_load_balancing   = true
+  idle_timeout                = 400
+  connection_draining         = true
+  connection_draining_timeout = 400
+
   tags = {
-    Name = "${var.project_name}-jenkins-tg"
+    Name = "${local.name}-vault-elb"
   }
 }
 
-# Target Group Attachment for Jenkins
-resource "aws_lb_target_group_attachment" "jenkins_attachment" {
-  target_group_arn = aws_lb_target_group.jenkins_tg.arn
-  target_id        = aws_instance.jenkins.id
-  port             = 8080
-}
-
-# ALB Listener for Jenkins
-resource "aws_lb_listener" "jenkins_listener" {
-  load_balancer_arn = aws_lb.jenkins_alb.arn
-  port              = "80"
-  protocol          = "HTTP"
-  
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.jenkins_tg.arn
-  }
-}
-
-# Route53 Health Check for Jenkins
-resource "aws_route53_health_check" "jenkins_health" {
-  count                           = var.create_route53_health_checks ? 1 : 0
-  fqdn                            = aws_lb.jenkins_alb.dns_name
-  port                            = 80
-  type                            = "HTTP"
-  resource_path                   = "/login"
-  failure_threshold               = "3"
-  request_interval                = "30"
-  insufficient_data_health_status = "Unhealthy"
-  
-  tags = {
-    Name = "${var.project_name}-jenkins-health-check"
-  }
-}
-
-# Application Load Balancer for Vault (Internal)
-resource "aws_lb" "vault_alb" {
-  name               = "fiifi-pet-adoption-vault-alb"
-  internal           = true
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.vault_sg.id]
-  subnets            = aws_subnet.private_subnets[*].id
-  
-  enable_deletion_protection = false
-  
-  tags = {
-    Name = "${var.project_name}-vault-alb"
-  }
-}
-
-# Target Group for Vault
-resource "aws_lb_target_group" "vault_tg" {
-  name     = "fiifi-pet-adoption-vault-tg"
-  port     = 8200
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.pet_adoption_vpc.id
-  
-  health_check {
-    enabled             = true
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    timeout             = 5
-    interval            = 30
-    path                = "/v1/sys/health"
-    matcher             = "200"
-    port                = "traffic-port"
-    protocol            = "HTTP"
-  }
-  
-  tags = {
-    Name = "${var.project_name}-vault-tg"
-  }
-}
-
-# Target Group Attachment for Vault
-resource "aws_lb_target_group_attachment" "vault_attachment" {
-  target_group_arn = aws_lb_target_group.vault_tg.arn
-  target_id        = aws_instance.vault.id
-  port             = 8200
-}
-
-# ALB Listener for Vault
-resource "aws_lb_listener" "vault_listener" {
-  load_balancer_arn = aws_lb.vault_alb.arn
-  port              = "80"
-  protocol          = "HTTP"
-  
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.vault_tg.arn
-  }
-}
-
-# Route53 DNS Records
-locals {
-  zone_id = var.create_route53_zone ? aws_route53_zone.domain[0].zone_id : data.aws_route53_zone.domain[0].zone_id
-}
-
-# Jenkins DNS Record
-resource "aws_route53_record" "jenkins" {
-  zone_id = local.zone_id
-  name    = "${var.jenkins_subdomain}.${var.domain_name}"
+# Create Route 53 record for vault server
+resource "aws_route53_record" "vault_record" {
+  zone_id = aws_route53_zone.fiifi_zone.zone_id
+  name    = "vault.${var.domain_name}"
   type    = "A"
-  
+
   alias {
-    name                   = aws_lb.jenkins_alb.dns_name
-    zone_id                = aws_lb.jenkins_alb.zone_id
+    name                   = aws_elb.vault_elb.dns_name
+    zone_id                = aws_elb.vault_elb.zone_id
     evaluate_target_health = true
   }
 }
 
-# Vault DNS Record (Internal ALB)
-resource "aws_route53_record" "vault" {
-  zone_id = local.zone_id
-  name    = "${var.vault_subdomain}.${var.domain_name}"
+# Create Route 53 record for jenkins server
+resource "aws_route53_record" "jenkins_record" {
+  zone_id = aws_route53_zone.fiifi_zone.zone_id
+  name    = "jenkins.${var.domain_name}"
   type    = "A"
-  
+
   alias {
-    name                   = aws_lb.vault_alb.dns_name
-    zone_id                = aws_lb.vault_alb.zone_id
+    name                   = aws_elb.elb_jenkins.dns_name
+    zone_id                = aws_elb.elb_jenkins.zone_id
     evaluate_target_health = true
-  }
-}
-
-# Root domain record (pointing to Jenkins)
-resource "aws_route53_record" "root" {
-  zone_id = local.zone_id
-  name    = var.domain_name
-  type    = "A"
-  
-  alias {
-    name                   = aws_lb.jenkins_alb.dns_name
-    zone_id                = aws_lb.jenkins_alb.zone_id
-    evaluate_target_health = true
-  }
-}
-
-# WWW subdomain record
-resource "aws_route53_record" "www" {
-  zone_id = local.zone_id
-  name    = "www.${var.domain_name}"
-  type    = "CNAME"
-  ttl     = 300
-  records = [var.domain_name]
-}
-
-# CloudWatch Log Groups
-resource "aws_cloudwatch_log_group" "jenkins_logs" {
-  name              = "/aws/ec2/${var.project_name}/jenkins"
-  retention_in_days = var.log_retention_days
-  
-  tags = {
-    Name = "${var.project_name}-jenkins-logs"
-  }
-}
-
-resource "aws_cloudwatch_log_group" "vault_logs" {
-  name              = "/aws/ec2/${var.project_name}/vault"
-  retention_in_days = var.log_retention_days
-  
-  tags = {
-    Name = "${var.project_name}-vault-logs"
   }
 }

@@ -1,34 +1,150 @@
 #!/bin/bash
 
-# Jenkins User Data Script for Fiifi Pet Adoption Auto Discovery Project
-# This script installs and configures Jenkins on a Red Hat Enterprise Linux instance
+# Comprehensive Jenkins installation for Fiifi Pet Adoption Auto Discovery Project
+# With all required tools and configurations
 
-set -e  # Exit on any error
+set -e
+exec > >(tee /var/log/jenkins-userdata.log) 2>&1
 
-# Update system packages
-sudo dnf update -y
+echo "Starting Jenkins installation at $(date)"
+
+# Default AWS region
+export AWS_DEFAULT_REGION=eu-west-3
+
+# Set hostname to fiifi-jenkins
+echo "Setting hostname to fiifi-jenkins..."
+hostnamectl set-hostname fiifi-jenkins
+echo "127.0.0.1 fiifi-jenkins" >> /etc/hosts
+
+# Update OS and install dependencies
+echo "Updating system packages..."
+dnf update -y
+
+echo "Installing required dependencies..."
+dnf install -y wget curl unzip git tar gzip
+
+# Install Amazon SSM Agent
+echo "Installing Amazon SSM Agent..."
+dnf install -y amazon-ssm-agent
+systemctl enable amazon-ssm-agent
+systemctl start amazon-ssm-agent
+
+# Install Session Manager plugin
+echo "Installing Session Manager plugin..."
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm" -o "session-manager-plugin.rpm"
+dnf install -y ./session-manager-plugin.rpm
+rm -f session-manager-plugin.rpm
 
 # Install Java 11 (required for Jenkins)
-sudo dnf install -y java-11-openjdk java-11-openjdk-devel
+echo "Installing Java 11..."
+dnf install -y java-11-openjdk java-11-openjdk-devel
 
 # Set JAVA_HOME
-echo 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk' | sudo tee -a /etc/environment
-source /etc/environment
+echo "Setting JAVA_HOME..."
+echo 'export JAVA_HOME=/usr/lib/jvm/java-11-openjdk' | tee -a /etc/environment
+export JAVA_HOME=/usr/lib/jvm/java-11-openjdk
 
-# Add Jenkins repository
-sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
-sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+# Jenkins repository and key
+echo "Adding Jenkins repository..."
+wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
 
-# Install Jenkins
-sudo dnf install -y jenkins
+# Upgrade system and install Java & Jenkins
+echo "Installing Jenkins..."
+dnf install -y jenkins
 
-# Install Git for source code management
-sudo dnf install -y git
+# Systemd configuration for Jenkins
+echo "Configuring Jenkins systemd service..."
+systemctl daemon-reload
+systemctl enable jenkins
 
-# Install Docker for containerized builds
-sudo dnf install -y docker
-sudo systemctl start docker
-sudo systemctl enable docker
+# Docker installation and configuration
+echo "Installing Docker..."
+dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Configure Docker
+systemctl enable docker
+systemctl start docker
+
+# Add jenkins user to docker group
+usermod -aG docker jenkins
+
+# Trivy installation
+echo "Installing Trivy..."
+cat > /etc/yum.repos.d/trivy.repo << 'EOF'
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
+EOF
+dnf install -y trivy
+
+# AWS CLI installation
+echo "Installing AWS CLI..."
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+./aws/install
+rm -rf aws awscliv2.zip
+
+# Start Jenkins service
+echo "Starting Jenkins service..."
+systemctl start jenkins
+
+# Wait and check status
+echo "Waiting for Jenkins to start..."
+sleep 30
+
+# Check if Jenkins is running
+if systemctl is-active --quiet jenkins; then
+    echo "SUCCESS: Jenkins service is running"
+    
+    # Wait for Jenkins to be fully ready
+    echo "Waiting for Jenkins to be fully ready..."
+    timeout=300
+    elapsed=0
+    while [ $elapsed -lt $timeout ]; do
+        if curl -s http://localhost:8080/login > /dev/null 2>&1; then
+            echo "Jenkins web interface is ready"
+            break
+        fi
+        sleep 10
+        elapsed=$((elapsed + 10))
+        echo "Waiting... ($elapsed seconds)"
+    done
+    
+    # Display initial admin password location
+    echo "Jenkins initial admin password location: /var/lib/jenkins/secrets/initialAdminPassword"
+    
+    # Get initial admin password
+    if [ -f /var/lib/jenkins/secrets/initialAdminPassword ]; then
+        INITIAL_PASSWORD=$(cat /var/lib/jenkins/secrets/initialAdminPassword)
+        echo "Jenkins initial admin password: $INITIAL_PASSWORD"
+        echo "$INITIAL_PASSWORD" | tee /opt/jenkins-initial-password.txt
+        chmod 644 /opt/jenkins-initial-password.txt
+    fi
+    
+else
+    echo "ERROR: Jenkins service failed to start"
+    systemctl status jenkins --no-pager
+    journalctl -u jenkins --no-pager -n 20
+fi
+
+# Configure firewall for Jenkins (port 8080)
+firewall-cmd --permanent --zone=public --add-port=8080/tcp || true
+firewall-cmd --reload || true
+
+# Create completion marker
+echo "Jenkins installation completed successfully at $(date)" | tee /opt/jenkins-ready.txt
+
+echo "Jenkins installation completed at $(date)"
+echo "Hostname: $(hostname)"
+echo "AWS CLI version: $(aws --version)"
+echo "Docker version: $(docker --version)"
+echo "Trivy version: $(trivy --version)"
+echo "Access Jenkins at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):8080"
 sudo usermod -a -G docker jenkins
 
 # Install AWS CLI v2
@@ -118,7 +234,7 @@ PLUGINS=(
 # Install plugins
 for plugin in "${PLUGINS[@]}"; do
     echo "Installing plugin: $plugin"
-    echo 'jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", "'$INITIAL_PASSWORD'")' | $JENKINS_CLI groovy = || true
+    echo 'jenkins.model.Jenkins.instance.securityRealm.createAccount("admin", "'$INITIAL_PASSWORD'")' | $JENKINS_CLI groovy || true
 done
 EOF
 
