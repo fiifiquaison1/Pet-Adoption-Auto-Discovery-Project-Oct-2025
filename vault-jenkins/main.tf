@@ -359,7 +359,7 @@ resource "aws_instance" "vault" {
   }
 
   # User data script to install Vault and required tools
-  user_data = templatefile("./vault-userdata-optimized.sh", {
+  user_data = templatefile("./vault-userdata-merged.sh", {
     region        = var.aws_region,
     VAULT_VERSION = "1.18.3",
     key           = aws_kms_key.vault.id
