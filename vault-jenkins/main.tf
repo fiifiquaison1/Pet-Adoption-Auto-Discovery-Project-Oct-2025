@@ -16,7 +16,7 @@ locals {
 module "vpc" {
   source = "../modules/vpc"
 
-  name_prefix           = local.name
+  name_prefix          = local.name
   vpc_cidr             = "10.0.0.0/16"
   public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
   private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
@@ -158,7 +158,7 @@ resource "aws_instance" "jenkins-server" {
     })
   }
 
-  user_data = base64encode(file("./jenkins-userdata-merged.sh"))
+  user_data = base64encode(file("./jenkins-userdata.sh"))
 
   metadata_options {
     http_tokens = "required"
@@ -171,10 +171,10 @@ resource "aws_instance" "jenkins-server" {
   }
 
   tags = merge(local.common_tags, {
-    Name        = "${local.name}-jenkins-server"
-    Type        = "Jenkins-Server"
-    OS          = "RedHat"
-    Role        = "CI/CD-Server"
+    Name = "${local.name}-jenkins-server"
+    Type = "Jenkins-Server"
+    OS   = "RedHat"
+    Role = "CI/CD-Server"
   })
 }
 
@@ -192,7 +192,7 @@ resource "aws_acm_certificate" "fiifi_acm_cert" {
   domain_name               = var.domain_name
   subject_alternative_names = ["*.${var.domain_name}"]
   validation_method         = "DNS"
-  
+
   lifecycle {
     create_before_destroy = true
   }
@@ -227,7 +227,7 @@ resource "aws_acm_certificate_validation" "fiifi_cert_validation" {
   certificate_arn         = aws_acm_certificate.fiifi_acm_cert.arn
   validation_record_fqdns = [for record in aws_route53_record.acm_validation_record : record.fqdn]
   depends_on              = [aws_acm_certificate.fiifi_acm_cert]
-  
+
   timeouts {
     create = "10m"
   }
@@ -377,10 +377,10 @@ resource "aws_instance" "vault" {
 
   # Tag the instance for easy identification
   tags = merge(local.common_tags, {
-    Name        = "${local.name}-vault-server"
-    Type        = "Vault-Server"
-    OS          = "Ubuntu"
-    Role        = "Secrets-Management"
+    Name = "${local.name}-vault-server"
+    Type = "Vault-Server"
+    OS   = "Ubuntu"
+    Role = "Secrets-Management"
   })
 }
 

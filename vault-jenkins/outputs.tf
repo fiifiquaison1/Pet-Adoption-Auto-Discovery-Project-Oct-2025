@@ -15,6 +15,6 @@ output "vault_url" {
 }
 
 output "route53_name_servers" {
-  value = aws_route53_zone.fiifi_zone.name_servers
+  value       = aws_route53_zone.fiifi_zone.name_servers
   description = "Name servers for the Route53 hosted zone - configure these in your domain registrar"
 }

@@ -18,19 +18,19 @@ NC='\033[0m' # No Color
 
 # Function to print colored output with timestamps
 log_status() {
-    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] [INFO]${NC} $1" | tee -a "$LOG_FILE"
+    echo -e "$${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] [INFO]$${NC} $1" | tee -a "$LOG_FILE"
 }
 
 log_success() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS]${NC} $1" | tee -a "$LOG_FILE"
+    echo -e "$${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS]$${NC} $1" | tee -a "$LOG_FILE"
 }
 
 log_warning() {
-    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING]${NC} $1" | tee -a "$LOG_FILE"
+    echo -e "$${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING]$${NC} $1" | tee -a "$LOG_FILE"
 }
 
 log_error() {
-    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR]${NC} $1" | tee -a "$LOG_FILE"
+    echo -e "$${RED}[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR]$${NC} $1" | tee -a "$LOG_FILE"
 }
 
 # Function to update system
@@ -53,10 +53,10 @@ install_vault() {
     log_status "Downloading Vault version $VAULT_VERSION..."
     
     # Download Vault binary
-    wget -q https://releases.hashicorp.com/vault/"${VAULT_VERSION}"/vault_"${VAULT_VERSION}"_linux_amd64.zip
+    wget -q https://releases.hashicorp.com/vault/"$${VAULT_VERSION}"/vault_"$${VAULT_VERSION}"_linux_amd64.zip
     
     # Unzip and install
-    unzip -q vault_"${VAULT_VERSION}"_linux_amd64.zip
+    unzip -q vault_"$${VAULT_VERSION}"_linux_amd64.zip
     mv vault /usr/local/bin/
     
     # Set permissions
@@ -64,7 +64,7 @@ install_vault() {
     chmod 755 /usr/local/bin/vault
     
     # Cleanup
-    rm -f vault_"${VAULT_VERSION}"_linux_amd64.zip
+    rm -f vault_"$${VAULT_VERSION}"_linux_amd64.zip
     
     log_success "Vault binary installed successfully"
 }
