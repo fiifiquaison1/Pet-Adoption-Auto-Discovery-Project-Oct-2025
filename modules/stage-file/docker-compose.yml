@@ -1,0 +1,77 @@
+version: '3.8'
+
+# Docker Compose for Fiifi Pet Adoption Auto Discovery - Staging Environment
+# This orchestrates the containerized Terraform deployment
+
+services:
+  terraform-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fiifi-pet-adoption-staging-terraform
+    environment:
+      - AWS_REGION=${AWS_REGION:-eu-west-3}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-west-3}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_PROFILE=${AWS_PROFILE}
+      - TF_IN_AUTOMATION=true
+      - TF_CLI_ARGS_plan=-no-color
+      - TF_CLI_ARGS_apply=-no-color
+      - TF_CLI_ARGS_destroy=-no-color
+    volumes:
+      # Mount the entire module directory
+      - .:/workspace
+      # Mount vault-jenkins directory for Terraform configuration
+      - ../../vault-jenkins:/workspace/vault-jenkins
+      # Mount AWS credentials if they exist
+      - ${HOME}/.aws:/home/terraform/.aws:ro
+    working_dir: /workspace
+    networks:
+      - pet-adoption-network
+    # Keep container running for interactive use
+    tty: true
+    stdin_open: true
+
+  # Jenkins staging container (for local development/testing)
+  jenkins-staging:
+    image: jenkins/jenkins:lts-alpine
+    container_name: fiifi-pet-adoption-jenkins-staging
+    environment:
+      - JENKINS_OPTS=--httpPort=8080
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins-staging-data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - pet-adoption-network
+    profiles:
+      - local-services
+
+  # Vault staging container (for local development/testing)
+  vault-staging:
+    image: hashicorp/vault:latest
+    container_name: fiifi-pet-adoption-vault-staging
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=staging-root-token
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - pet-adoption-network
+    profiles:
+      - local-services
+
+volumes:
+  jenkins-staging-data:
+    driver: local
+
+networks:
+  pet-adoption-network:
+    driver: bridge
+    name: pet-adoption-network
