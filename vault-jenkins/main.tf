@@ -3,58 +3,25 @@
 
 locals {
   name = "fiifi-pet-adoption-auto-discovery"
-}
-
-# VPC
-resource "aws_vpc" "vpc" {
-  cidr_block           = "10.0.0.0/16"
-  instance_tenancy     = "default"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-
-  tags = {
-    Name = "${local.name}-vpc"
+  common_tags = {
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+    Project     = "Fiifi-Pet-Adoption-Auto-Discovery"
+    Owner       = "fiifiquaison1"
+    CreatedDate = "2025-10-18"
   }
 }
 
-# Create public subnet 1
-resource "aws_subnet" "pub_sub" {
-  vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "eu-west-3a"
-  map_public_ip_on_launch = true
+# VPC Module
+module "vpc" {
+  source = "./modules/vpc"
 
-  tags = {
-    Name = "${local.name}-pub-sub"
-    Type = "Public"
-  }
-}
-
-# Create internet gateway
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.vpc.id
-
-  tags = {
-    Name = "${local.name}-igw"
-  }
-}
-
-# Create route table for public subnet
-resource "aws_route_table" "pub_rt" {
-  vpc_id = aws_vpc.vpc.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
-  }
-  tags = {
-    Name = "${local.name}-pub-rt"
-  }
-}
-
-# Creating route table association for public_subnet_1
-resource "aws_route_table_association" "ass-public_subnet" {
-  subnet_id      = aws_subnet.pub_sub.id
-  route_table_id = aws_route_table.pub_rt.id
+  name_prefix           = local.name
+  vpc_cidr             = "10.0.0.0/16"
+  public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+  private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
+  availability_zones   = ["eu-west-3a", "eu-west-3b"]
+  tags                 = local.common_tags
 }
 
 # Create keypair resource
@@ -73,9 +40,9 @@ resource "aws_key_pair" "public_key" {
   key_name   = "${local.name}-key"
   public_key = tls_private_key.keypair.public_key_openssh
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-key"
-  }
+  })
 }
 
 # Data source to get the latest RedHat AMI
@@ -113,9 +80,9 @@ resource "aws_iam_role" "ssm-jenkins-role" {
     ]
   })
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-ssm-jenkins-role"
-  }
+  })
 }
 
 # Attach AmazonSSMManaged policy to JENKINS IAM role
@@ -140,7 +107,7 @@ resource "aws_iam_instance_profile" "ssm_instance_profile" {
 resource "aws_security_group" "jenkins_sg" {
   name        = "${local.name}-jenkins-sg"
   description = "Allow SSH and Jenkins access"
-  vpc_id      = aws_vpc.vpc.id
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     from_port   = 8080
@@ -166,9 +133,9 @@ resource "aws_security_group" "jenkins_sg" {
     description = "All outbound traffic"
   }
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-jenkins-sg"
-  }
+  })
 }
 
 # Jenkins EC2 Instance
@@ -177,7 +144,7 @@ resource "aws_instance" "jenkins-server" {
   instance_type               = "t3.medium"
   key_name                    = aws_key_pair.public_key.id
   associate_public_ip_address = true
-  subnet_id                   = aws_subnet.pub_sub.id
+  subnet_id                   = module.vpc.public_subnet_id
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
   iam_instance_profile        = aws_iam_instance_profile.ssm_instance_profile.name
 
@@ -186,33 +153,38 @@ resource "aws_instance" "jenkins-server" {
     volume_type = "gp3"
     encrypted   = true
 
-    tags = {
+    tags = merge(local.common_tags, {
       Name = "${local.name}-jenkins-root"
-    }
+    })
   }
 
-  user_data = base64encode(file("./jenkins-userdata.sh"))
+  user_data = base64encode(file("./jenkins-userdata-optimized.sh"))
 
   metadata_options {
     http_tokens = "required"
   }
 
-  tags = {
+  timeouts {
+    create = "10m"
+    update = "5m"
+    delete = "5m"
+  }
+
+  tags = merge(local.common_tags, {
     Name        = "${local.name}-jenkins-server"
     Type        = "Jenkins-Server"
     OS          = "RedHat"
-    Environment = var.environment
     Role        = "CI/CD-Server"
-  }
+  })
 }
 
 # Create Route53 hosted zone for the domain
 resource "aws_route53_zone" "fiifi_zone" {
   name = var.domain_name
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-hosted-zone"
-  }
+  })
 }
 
 # Create ACM certificate with DNS validation
@@ -225,9 +197,9 @@ resource "aws_acm_certificate" "fiifi_acm_cert" {
     create_before_destroy = true
   }
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-acm-cert"
-  }
+  })
 }
 
 # Fetch DNS Validation Records for ACM Certificate
@@ -255,13 +227,17 @@ resource "aws_acm_certificate_validation" "fiifi_cert_validation" {
   certificate_arn         = aws_acm_certificate.fiifi_acm_cert.arn
   validation_record_fqdns = [for record in aws_route53_record.acm_validation_record : record.fqdn]
   depends_on              = [aws_acm_certificate.fiifi_acm_cert]
+  
+  timeouts {
+    create = "10m"
+  }
 }
 
 # Create Security group for the jenkins elb
 resource "aws_security_group" "jenkins-elb-sg" {
   name        = "${local.name}-jenkins-elb-sg"
   description = "Allow HTTPS for Jenkins ELB"
-  vpc_id      = aws_vpc.vpc.id
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     from_port   = 443
@@ -287,16 +263,16 @@ resource "aws_security_group" "jenkins-elb-sg" {
     description = "All outbound traffic"
   }
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-jenkins-elb-sg"
-  }
+  })
 }
 
 # Create elastic Load Balancer for Jenkins
 resource "aws_elb" "elb_jenkins" {
   name            = "fiifi-pet-adoption-jenkins-elb"
   security_groups = [aws_security_group.jenkins-elb-sg.id]
-  subnets         = [aws_subnet.pub_sub.id]
+  subnets         = module.vpc.public_subnet_ids
 
   listener {
     instance_port     = 8080
@@ -305,19 +281,20 @@ resource "aws_elb" "elb_jenkins" {
     lb_protocol       = "HTTP"
   }
 
-  listener {
-    instance_port      = 8080
-    instance_protocol  = "HTTP"
-    lb_port            = 443
-    lb_protocol        = "HTTPS"
-    ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
-  }
+  # Temporarily comment out HTTPS listener until DNS is delegated
+  # listener {
+  #   instance_port      = 8080
+  #   instance_protocol  = "HTTP"
+  #   lb_port            = 443
+  #   lb_protocol        = "HTTPS"
+  #   ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
+  # }
 
   health_check {
-    healthy_threshold   = 3
-    unhealthy_threshold = 2
-    interval            = 30
-    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 60
+    timeout             = 10
     target              = "TCP:8080"
   }
 
@@ -327,9 +304,9 @@ resource "aws_elb" "elb_jenkins" {
   connection_draining         = true
   connection_draining_timeout = 400
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-jenkins-elb"
-  }
+  })
 }
 
 # Data source to get the latest Ubuntu AMI
@@ -356,16 +333,16 @@ resource "aws_kms_key" "vault" {
   enable_key_rotation     = true
   deletion_window_in_days = 20
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-vault-kms-key"
-  }
+  })
 }
 
 # Create a vault server
 resource "aws_instance" "vault" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = "t2.medium"
-  subnet_id                   = aws_subnet.pub_sub.id
+  subnet_id                   = module.vpc.public_subnet_id
   vpc_security_group_ids      = [aws_security_group.vault_sg.id]
   key_name                    = aws_key_pair.public_key.key_name
   associate_public_ip_address = true
@@ -376,13 +353,13 @@ resource "aws_instance" "vault" {
     volume_type = "gp3"
     encrypted   = true
 
-    tags = {
+    tags = merge(local.common_tags, {
       Name = "${local.name}-vault-root"
-    }
+    })
   }
 
   # User data script to install Vault and required tools
-  user_data = templatefile("./vault-userdata.sh", {
+  user_data = templatefile("./vault-userdata-optimized.sh", {
     region        = var.aws_region,
     VAULT_VERSION = "1.18.3",
     key           = aws_kms_key.vault.id
@@ -392,21 +369,26 @@ resource "aws_instance" "vault" {
     http_tokens = "required"
   }
 
+  timeouts {
+    create = "10m"
+    update = "5m"
+    delete = "5m"
+  }
+
   # Tag the instance for easy identification
-  tags = {
+  tags = merge(local.common_tags, {
     Name        = "${local.name}-vault-server"
     Type        = "Vault-Server"
     OS          = "Ubuntu"
-    Environment = var.environment
     Role        = "Secrets-Management"
-  }
+  })
 }
 
 # Security Group for Vault server
 resource "aws_security_group" "vault_sg" {
   name        = "${local.name}-vault-sg"
   description = "Allow Vault traffic"
-  vpc_id      = aws_vpc.vpc.id
+  vpc_id      = module.vpc.vpc_id
 
   # Vault API and UI
   ingress {
@@ -435,9 +417,9 @@ resource "aws_security_group" "vault_sg" {
     description = "All outbound traffic"
   }
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-vault-sg"
-  }
+  })
 }
 
 # Creating and attaching an IAM role with SSM permissions to the vault instance
@@ -455,9 +437,9 @@ resource "aws_iam_role" "vault_ssm_role" {
     }]
   })
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-ssm-vault-role"
-  }
+  })
 }
 
 # Create IAM role policy to give permission to the KMS role
@@ -499,7 +481,7 @@ resource "aws_iam_instance_profile" "vault_ssm_profile" {
 resource "aws_security_group" "vault_elb_sg" {
   name        = "${local.name}-vault-elb-sg"
   description = "Allow HTTPS traffic for Vault ELB"
-  vpc_id      = aws_vpc.vpc.id
+  vpc_id      = module.vpc.vpc_id
 
   # HTTPS access
   ingress {
@@ -528,15 +510,15 @@ resource "aws_security_group" "vault_elb_sg" {
     description = "All outbound traffic"
   }
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-vault-elb-sg"
-  }
+  })
 }
 
 # Create a new load balancer for vault
 resource "aws_elb" "vault_elb" {
   name            = "fiifi-pet-adoption-vault-elb"
-  subnets         = [aws_subnet.pub_sub.id]
+  subnets         = module.vpc.public_subnet_ids
   security_groups = [aws_security_group.vault_elb_sg.id]
 
   listener {
@@ -546,20 +528,21 @@ resource "aws_elb" "vault_elb" {
     lb_protocol       = "HTTP"
   }
 
-  listener {
-    instance_port      = 8200
-    instance_protocol  = "HTTP"
-    lb_port            = 443
-    lb_protocol        = "HTTPS"
-    ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
-  }
+  # Temporarily comment out HTTPS listener until DNS is delegated
+  # listener {
+  #   instance_port      = 8200
+  #   instance_protocol  = "HTTP"
+  #   lb_port            = 443
+  #   lb_protocol        = "HTTPS"
+  #   ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
+  # }
 
   health_check {
     healthy_threshold   = 2
-    unhealthy_threshold = 2
-    timeout             = 3
+    unhealthy_threshold = 3
+    timeout             = 10
     target              = "TCP:8200"
-    interval            = 30
+    interval            = 60
   }
 
   instances                   = [aws_instance.vault.id]
@@ -568,9 +551,9 @@ resource "aws_elb" "vault_elb" {
   connection_draining         = true
   connection_draining_timeout = 400
 
-  tags = {
+  tags = merge(local.common_tags, {
     Name = "${local.name}-vault-elb"
-  }
+  })
 }
 
 # Create Route 53 record for vault server
