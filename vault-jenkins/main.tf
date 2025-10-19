@@ -158,7 +158,7 @@ resource "aws_instance" "jenkins-server" {
     })
   }
 
-  user_data = base64encode(file("./jenkins-userdata-optimized.sh"))
+  user_data = base64encode(file("./jenkins-userdata-merged.sh"))
 
   metadata_options {
     http_tokens = "required"
