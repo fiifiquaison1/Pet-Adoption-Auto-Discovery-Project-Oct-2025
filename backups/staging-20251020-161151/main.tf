@@ -34,11 +34,6 @@ resource "local_file" "private_key" {
   content         = tls_private_key.keypair.private_key_pem
   filename        = "${local.name}-key.pem"
   file_permission = "400"
-  
-  lifecycle {
-    # Prevent accidental commits of the private key
-    ignore_changes = all
-  }
 }
 
 resource "aws_key_pair" "public_key" {
@@ -172,12 +167,7 @@ resource "aws_instance" "jenkins-server" {
   timeouts {
     create = "10m"
     update = "5m"
-    delete = "10m"  # Increased delete timeout
-  }
-
-  # Prevent accidental deletion in production
-  lifecycle {
-    prevent_destroy = false  # Set to true for production
+    delete = "5m"
   }
 
   tags = merge(local.common_tags, {
@@ -239,12 +229,7 @@ resource "aws_acm_certificate_validation" "fiifi_cert_validation" {
   depends_on              = [aws_acm_certificate.fiifi_acm_cert]
 
   timeouts {
-    create = "20m"  # Increased timeout for DNS propagation
-  }
-
-  lifecycle {
-    # Allow recreation if validation fails
-    create_before_destroy = true
+    create = "10m"
   }
 }
 
@@ -387,12 +372,7 @@ resource "aws_instance" "vault" {
   timeouts {
     create = "10m"
     update = "5m"
-    delete = "10m"  # Increased delete timeout
-  }
-
-  # Prevent accidental deletion in production
-  lifecycle {
-    prevent_destroy = false  # Set to true for production
+    delete = "5m"
   }
 
   # Tag the instance for easy identification

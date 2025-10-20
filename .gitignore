@@ -35,3 +35,74 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Private keys and certificates - NEVER COMMIT THESE!
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.ssh
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# Local development files
+local/
+temp/
+tmp/
+
+# Sensitive configuration
+secrets/
+private/
+confidential/
+
+# Deployment artifacts
+deployment-*.log
+prod-deployment-*.log
+staging-deployment-*.log
+cleanup-*.log
+
+# State backups
+state-backups/
+backups/*/terraform.tfstate*
