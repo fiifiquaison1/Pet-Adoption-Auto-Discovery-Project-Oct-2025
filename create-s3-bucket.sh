@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration variables
-BUCKET_NAME="pet-adoption-state-bucket-1133313317711lington"
+BUCKET_NAME="auto-discovery-fiifi-1986"
 AWS_REGION="eu-west-3"
 AWS_PROFILE="pet-adoption"
 PROJECT_TAG="Fiifi-Pet-Adoption-Auto-Discovery"

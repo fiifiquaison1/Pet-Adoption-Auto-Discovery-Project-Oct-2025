@@ -5,9 +5,9 @@
 
 set -euo pipefail
 
-# Configuration variables (matching create script)
-BUCKET_NAME="pet-adoption-state-bucket-1133313317711lington"
-AWS_REGION="eu-west-3"  # Using same region as create script
+# Configuration variables (will be overridden by bucket-info.txt if it exists)
+BUCKET_NAME="auto-discovery-fiifi-1986"
+AWS_REGION="eu-west-3"
 AWS_PROFILE="pet-adoption"
 PROJECT_TAG="Fiifi-Pet-Adoption-Auto-Discovery"
 
@@ -48,8 +48,16 @@ check_jq() {
     fi
 }
 
-echo "�️ Pet Adoption Auto Discovery - Infrastructure Destruction"
+echo "🗑️ Pet Adoption Auto Discovery - Infrastructure Destruction"
 echo "=========================================================="
+
+# Load actual bucket info if available
+if [[ -f "bucket-info.txt" ]]; then
+    print_status "$BLUE" "📋 Loading bucket configuration from bucket-info.txt..."
+    source bucket-info.txt
+    print_status "$GREEN" "✅ Loaded configuration: $BUCKET_NAME in $AWS_REGION"
+fi
+
 echo "Bucket: $BUCKET_NAME"
 echo "Region: $AWS_REGION"
 echo "Profile: $AWS_PROFILE"
