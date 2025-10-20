@@ -1,295 +1,200 @@
 #!/bin/bash
 
-# Fiifi Pet Adoption Auto Discovery Project - S3 Bucket Destruction Script
-# This script safely destroys the S3 bucket and all its contents
+# Pet Adoption Auto Discovery Project - Infrastructure Destroy Script
+# This script destroys Vault/Jenkins infrastructure and deletes the S3 bucket
 
-set -e  # Exit on any error
+set -euo pipefail
 
-# Colors for output
+# Configuration variables (matching create script)
+BUCKET_NAME="pet-adoption-state-bucket-1133313317711lington"
+AWS_REGION="eu-west-3"  # Using same region as create script
+AWS_PROFILE="pet-adoption"
+PROJECT_TAG="Fiifi-Pet-Adoption-Auto-Discovery"
+
+# Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to print colored output
 print_status() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    local color="$1"
+    local message="$2"
+    echo -e "${color}${message}${NC}"
 }
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+# Check if AWS profile exists
+check_aws_profile() {
+    if ! aws configure list-profiles 2>/dev/null | grep -q "^${AWS_PROFILE}$"; then
+        print_status "$YELLOW" "⚠️  AWS profile '${AWS_PROFILE}' not found, using default profile"
+        AWS_PROFILE="default"
+    fi
 }
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Function to show usage
-show_usage() {
-    echo "Usage: $0 [BUCKET_NAME]"
-    echo ""
-    echo "Options:"
-    echo "  BUCKET_NAME    Specify the bucket name directly"
-    echo "  -h, --help     Show this help message"
-    echo "  -f, --force    Skip confirmation prompts"
-    echo ""
-    echo "Examples:"
-    echo "  $0                                    # Interactive mode"
-    echo "  $0 my-bucket-name                     # Destroy specific bucket"
-    echo "  $0 my-bucket-name --force             # Force destroy without confirmation"
-    echo ""
-    echo "If no bucket name is provided, the script will try to read from bucket-info.txt"
-}
-
-# Function to check if AWS CLI is installed
+# Check if AWS CLI is available
 check_aws_cli() {
     if ! command -v aws &> /dev/null; then
-        print_error "AWS CLI is not installed. Please install it first."
-        exit 1
-    fi
-    
-    print_success "AWS CLI is installed"
-}
-
-# Function to check AWS credentials
-check_aws_credentials() {
-    if ! aws sts get-caller-identity &> /dev/null; then
-        print_error "AWS credentials not configured. Please run 'aws configure' first."
-        exit 1
-    fi
-    
-    print_success "AWS credentials are configured"
-}
-
-# Function to get bucket name from bucket-info.txt
-get_bucket_from_info_file() {
-    if [[ -f "bucket-info.txt" ]]; then
-        BUCKET_NAME=$(grep "BUCKET_NAME=" bucket-info.txt | cut -d'=' -f2)
-        if [[ -n "$BUCKET_NAME" ]]; then
-            print_status "Found bucket name in bucket-info.txt: $BUCKET_NAME"
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# Function to prompt for bucket name
-prompt_for_bucket_name() {
-    while [[ -z "$BUCKET_NAME" ]]; do
-        read -p "Enter the S3 bucket name to destroy: " BUCKET_NAME
-        if [[ -z "$BUCKET_NAME" ]]; then
-            print_warning "Bucket name cannot be empty. Please try again."
-        fi
-    done
-}
-
-# Function to check if bucket exists
-check_bucket_exists() {
-    print_status "Checking if bucket '$BUCKET_NAME' exists..."
-    
-    if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
-        print_success "Bucket '$BUCKET_NAME' exists"
-        return 0
-    else
-        print_error "Bucket '$BUCKET_NAME' does not exist or you don't have access to it"
-        return 1
-    fi
-}
-
-# Function to show bucket information
-show_bucket_info() {
-    print_status "Bucket Information:"
-    echo "===================="
-    
-    # Get bucket region
-    REGION=$(aws s3api get-bucket-location --bucket "$BUCKET_NAME" --query 'LocationConstraint' --output text 2>/dev/null || echo "us-east-1")
-    if [[ "$REGION" == "None" || "$REGION" == "null" ]]; then
-        REGION="us-east-1"
-    fi
-    
-    echo "Bucket Name: $BUCKET_NAME"
-    echo "Region: $REGION"
-    echo "ARN: arn:aws:s3:::$BUCKET_NAME"
-    
-    # Get object count and size
-    print_status "Analyzing bucket contents..."
-    OBJECT_COUNT=$(aws s3 ls s3://"$BUCKET_NAME" --recursive --summarize 2>/dev/null | grep "Total Objects:" | awk '{print $3}' || echo "0")
-    TOTAL_SIZE=$(aws s3 ls s3://"$BUCKET_NAME" --recursive --summarize --human-readable 2>/dev/null | grep "Total Size:" | awk '{print $3 " " $4}' || echo "0 Bytes")
-    
-    echo "Total Objects: $OBJECT_COUNT"
-    echo "Total Size: $TOTAL_SIZE"
-    
-    # Show tags if any
-    print_status "Bucket tags:"
-    aws s3api get-bucket-tagging --bucket "$BUCKET_NAME" --query 'TagSet[*].[Key,Value]' --output table 2>/dev/null || echo "No tags found"
-    
-    echo "===================="
-}
-
-# Function to create backup before deletion
-create_backup() {
-    if [[ "$FORCE_MODE" != "true" ]]; then
-        read -p "Do you want to create a backup of the bucket contents before deletion? (y/N): " -r
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            BACKUP_DIR="./backup-$(date +%Y%m%d-%H%M%S)-$BUCKET_NAME"
-            print_status "Creating backup in $BACKUP_DIR..."
-            
-            mkdir -p "$BACKUP_DIR"
-            aws s3 sync s3://"$BUCKET_NAME" "$BACKUP_DIR" --delete
-            
-            print_success "Backup created in $BACKUP_DIR"
-        fi
-    fi
-}
-
-# Function to empty the bucket
-empty_bucket() {
-    print_status "Emptying bucket '$BUCKET_NAME'..."
-    
-    # Delete all objects and versions
-    aws s3 rm s3://"$BUCKET_NAME" --recursive
-    
-    # Delete all object versions and delete markers (for versioned buckets)
-    aws s3api delete-objects --bucket "$BUCKET_NAME" \
-        --delete "$(aws s3api list-object-versions --bucket "$BUCKET_NAME" \
-        --query '{Objects: Versions[].{Key: Key, VersionId: VersionId}, Quiet: true}' \
-        --output json)" 2>/dev/null || true
-    
-    aws s3api delete-objects --bucket "$BUCKET_NAME" \
-        --delete "$(aws s3api list-object-versions --bucket "$BUCKET_NAME" \
-        --query '{Objects: DeleteMarkers[].{Key: Key, VersionId: VersionId}, Quiet: true}' \
-        --output json)" 2>/dev/null || true
-    
-    print_success "Bucket emptied successfully"
-}
-
-# Function to delete the bucket
-delete_bucket() {
-    print_status "Deleting bucket '$BUCKET_NAME'..."
-    
-    if aws s3api delete-bucket --bucket "$BUCKET_NAME"; then
-        print_success "Bucket '$BUCKET_NAME' deleted successfully"
-    else
-        print_error "Failed to delete bucket '$BUCKET_NAME'"
+        print_status "$RED" "❌ AWS CLI is not installed. Please install it first."
         exit 1
     fi
 }
 
-# Function to cleanup local files
-cleanup_local_files() {
-    if [[ -f "bucket-info.txt" ]]; then
-        if [[ "$FORCE_MODE" != "true" ]]; then
-            read -p "Do you want to delete the local bucket-info.txt file? (y/N): " -r
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
-                rm bucket-info.txt
-                print_success "Local bucket-info.txt file deleted"
-            fi
+# Check if jq is available for JSON processing
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        print_status "$RED" "❌ jq is not installed. Please install it first for JSON processing."
+        exit 1
+    fi
+}
+
+echo "�️ Pet Adoption Auto Discovery - Infrastructure Destruction"
+echo "=========================================================="
+echo "Bucket: $BUCKET_NAME"
+echo "Region: $AWS_REGION"
+echo "Profile: $AWS_PROFILE"
+echo ""
+
+# Check prerequisites
+check_aws_cli
+check_jq
+check_aws_profile
+
+print_status "$YELLOW" "⚠️  WARNING: This will permanently destroy all infrastructure and data!"
+read -p "Are you sure you want to continue? (yes/no): " confirm
+
+if [[ "$confirm" != "yes" ]]; then
+    print_status "$BLUE" "🛑 Operation cancelled"
+    exit 0
+fi
+
+echo ""
+
+# Step 1: Destroy Vault and Jenkins infrastructure
+print_status "$BLUE" "🏗️ Destroying Jenkins and Vault server infrastructure..."
+
+if [[ ! -d "vault-jenkins" ]]; then
+    print_status "$YELLOW" "⚠️  vault-jenkins directory not found, skipping Terraform destroy"
+else
+    cd vault-jenkins
+    
+    # Check if Terraform is initialized
+    if [[ ! -d ".terraform" ]]; then
+        print_status "$BLUE" "🔧 Initializing Terraform..."
+        if terraform init; then
+            print_status "$GREEN" "✅ Terraform initialized"
         else
-            rm bucket-info.txt
-            print_success "Local bucket-info.txt file deleted"
-        fi
-    fi
-}
-
-# Function to confirm destruction
-confirm_destruction() {
-    if [[ "$FORCE_MODE" == "true" ]]; then
-        return 0
-    fi
-    
-    print_warning "⚠️  WARNING: This action will PERMANENTLY delete the S3 bucket and ALL its contents!"
-    print_warning "This action CANNOT be undone!"
-    echo ""
-    read -p "Are you absolutely sure you want to destroy bucket '$BUCKET_NAME'? (yes/NO): " -r
-    
-    if [[ $REPLY == "yes" ]]; then
-        print_warning "Last chance! Type the bucket name to confirm: $BUCKET_NAME"
-        read -p "Bucket name: " -r CONFIRM_BUCKET
-        
-        if [[ "$CONFIRM_BUCKET" == "$BUCKET_NAME" ]]; then
-            return 0
-        else
-            print_error "Bucket name doesn't match. Aborting."
+            print_status "$RED" "❌ Terraform initialization failed"
+            cd ..
             exit 1
         fi
+    fi
+    
+    # Destroy infrastructure
+    print_status "$BLUE" "💥 Destroying Terraform infrastructure..."
+    if terraform destroy -auto-approve; then
+        print_status "$GREEN" "✅ Infrastructure destroyed successfully"
     else
-        print_status "Operation cancelled by user"
-        exit 0
-    fi
-}
-
-# Parse command line arguments
-BUCKET_NAME=""
-FORCE_MODE="false"
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -h|--help)
-            show_usage
-            exit 0
-            ;;
-        -f|--force)
-            FORCE_MODE="true"
-            shift
-            ;;
-        -*)
-            print_error "Unknown option $1"
-            show_usage
-            exit 1
-            ;;
-        *)
-            if [[ -z "$BUCKET_NAME" ]]; then
-                BUCKET_NAME="$1"
-            fi
-            shift
-            ;;
-    esac
-done
-
-# Main execution
-main() {
-    print_status "Starting S3 bucket destruction for Fiifi Pet Adoption Auto Discovery Project"
-    print_status "=========================================="
-    
-    # Check prerequisites
-    check_aws_cli
-    check_aws_credentials
-    
-    # Get bucket name
-    if [[ -z "$BUCKET_NAME" ]]; then
-        if ! get_bucket_from_info_file; then
-            prompt_for_bucket_name
-        fi
-    fi
-    
-    # Validate bucket exists
-    if ! check_bucket_exists; then
+        print_status "$RED" "❌ Terraform destroy failed"
+        cd ..
         exit 1
     fi
     
-    # Show bucket information
-    show_bucket_info
+    # Clean up Terraform files
+    print_status "$BLUE" "🧹 Cleaning up Terraform state files..."
+    rm -f terraform.tfstate*
+    rm -f .terraform.lock.hcl
+    rm -rf .terraform/ 2>/dev/null || true
     
-    # Confirm destruction
-    confirm_destruction
+    # Security cleanup - remove any generated keys
+    find . -name "*.pem" -type f -delete 2>/dev/null || true
     
-    # Create backup if requested
-    create_backup
-    
-    # Perform destruction
-    empty_bucket
-    delete_bucket
-    cleanup_local_files
-    
-    print_status "=========================================="
-    print_success "S3 bucket '$BUCKET_NAME' has been completely destroyed!"
-    print_warning "Remember: This action is irreversible!"
-}
+    cd ..
+fi
 
-# Execute main function
-main "$@"
+# Step 2: Delete S3 bucket
+print_status "$BLUE" "🪣 Processing S3 bucket deletion..."
+
+# Check if bucket exists
+if ! aws s3api head-bucket --bucket "$BUCKET_NAME" --profile "$AWS_PROFILE" --region "$AWS_REGION" 2>/dev/null; then
+    print_status "$YELLOW" "⚠️  Bucket $BUCKET_NAME not found or not accessible"
+    print_status "$GREEN" "✅ S3 cleanup complete (bucket doesn't exist)"
+else
+    print_status "$YELLOW" "⚠️  Deleting all objects in $BUCKET_NAME. This process is irreversible..."
+    
+    # List all object versions and delete markers
+    print_status "$BLUE" "📋 Listing all object versions and delete markers..."
+    DELETE_LIST=$(aws s3api list-object-versions \
+        --bucket "$BUCKET_NAME" \
+        --profile "$AWS_PROFILE" \
+        --region "$AWS_REGION" \
+        --output json)
+    
+    # Extract objects to delete using jq
+    OBJECTS_TO_DELETE=$(echo "$DELETE_LIST" | jq '{
+        Objects: (
+            [.Versions[]?, .DeleteMarkers[]?]
+            | map({Key: .Key, VersionId: .VersionId})
+        ),
+        Quiet: true
+    }')
+    
+    # Count number of deletable items
+    NUM_OBJECTS=$(echo "$OBJECTS_TO_DELETE" | jq '.Objects | length')
+    
+    # Delete objects if there are any
+    if [ "$NUM_OBJECTS" -gt 0 ]; then
+        print_status "$BLUE" "🗑️ Deleting $NUM_OBJECTS objects from bucket: $BUCKET_NAME..."
+        if aws s3api delete-objects \
+            --bucket "$BUCKET_NAME" \
+            --delete "$OBJECTS_TO_DELETE" \
+            --region "$AWS_REGION" \
+            --profile "$AWS_PROFILE" > /dev/null; then
+            print_status "$GREEN" "✅ Object deletion complete"
+        else
+            print_status "$RED" "❌ Failed to delete some objects"
+        fi
+    else
+        print_status "$BLUE" "📭 No objects or versions found in $BUCKET_NAME"
+    fi
+    
+    # Attempt to delete the empty bucket
+    print_status "$BLUE" "🗑️ Deleting bucket: $BUCKET_NAME..."
+    if aws s3api delete-bucket \
+        --bucket "$BUCKET_NAME" \
+        --region "$AWS_REGION" \
+        --profile "$AWS_PROFILE"; then
+        print_status "$GREEN" "✅ Bucket $BUCKET_NAME deleted successfully"
+    else
+        print_status "$RED" "❌ Failed to delete bucket $BUCKET_NAME"
+        exit 1
+    fi
+fi
+
+# Step 3: Clean up local files
+print_status "$BLUE" "🧹 Cleaning up local files..."
+
+# Remove bucket info file
+if [[ -f "bucket-info.txt" ]]; then
+    rm -f bucket-info.txt
+    print_status "$GREEN" "✅ Removed bucket-info.txt"
+fi
+
+# Remove any remaining sensitive files
+find . -name "*.pem" -type f -delete 2>/dev/null || true
+rm -f *.log 2>/dev/null || true
+
+print_status "$GREEN" "🔒 Local cleanup completed"
+
+echo ""
+print_status "$GREEN" "🎉 Complete! All infrastructure and resources have been destroyed"
+print_status "$BLUE" "📝 Summary of actions:"
+echo "  ✅ Terraform infrastructure destroyed"
+echo "  ✅ S3 bucket and all contents deleted"
+echo "  ✅ Local state files cleaned up"
+echo "  ✅ Security sensitive files removed"
+echo ""
+print_status "$YELLOW" "💡 Remember to:"
+echo "  - Verify all resources are deleted in AWS Console"
+echo "  - Check for any remaining costs in AWS Billing"
+echo "  - Update any documentation or references"

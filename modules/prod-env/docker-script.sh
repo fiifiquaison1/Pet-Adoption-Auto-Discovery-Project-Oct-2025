@@ -293,7 +293,7 @@ destroy_environment() {
             print_status "$YELLOW" "🧹 Running comprehensive manual cleanup..."
             
             # Run the comprehensive cleanup script
-            local cleanup_script="$PROJECT_ROOT/cleanup-aws-resources.sh"
+            local cleanup_script="$PROJECT_ROOT/destroy-s3-bucket.sh"
             if [[ -f "$cleanup_script" ]]; then
                 bash "$cleanup_script"
             else
