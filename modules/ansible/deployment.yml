@@ -1,0 +1,213 @@
+---
+# Pet Adoption Auto Discovery Project - Ansible Deployment Playbook
+# This playbook handles automated deployment of the Pet Adoption application
+# Supports both staging and production environments
+
+- name: Deploy Pet Adoption Auto Discovery Application
+  hosts: "{{ target_environment | default('staging_webservers') }}"
+  become: true
+  gather_facts: true
+  vars_files:
+    - ansible_vars_file.yml
+  
+  vars:
+    # Application configuration
+    app_name: "pet-adoption-app"
+    app_port: 8080
+    container_name: "{{ app_name }}"
+    image_name: "{{ nexus_server_ip }}/pet-adoption-apps:{{ app_version | default('latest') }}"
+    
+    # Container configuration
+    container_restart_policy: "unless-stopped"
+    container_memory_limit: "512m"
+    container_cpu_limit: "0.5"
+    
+    # Health check configuration
+    health_check_url: "http://localhost:{{ app_port }}/actuator/health"
+    health_check_retries: 5
+    health_check_delay: 10
+
+  pre_tasks:
+    - name: Validate deployment prerequisites
+      block:
+        - name: Check if Docker is installed and running
+          service:
+            name: docker
+            state: started
+          register: docker_status
+          
+        - name: Verify Docker daemon is accessible
+          command: docker info
+          changed_when: false
+          
+        - name: Ensure deployment user can access Docker
+          user:
+            name: "{{ ansible_user }}"
+            groups: docker
+            append: true
+
+  tasks:
+    - name: Application deployment workflow
+      block:
+        - name: Stop existing container gracefully
+          docker_container:
+            name: "{{ container_name }}"
+            state: stopped
+            stop_timeout: 30
+          ignore_errors: true
+          register: stop_result
+          
+        - name: Remove existing container
+          docker_container:
+            name: "{{ container_name }}"
+            state: absent
+          ignore_errors: true
+          when: stop_result is succeeded
+          
+        - name: Remove old docker image to free space
+          docker_image:
+            name: "{{ image_name }}"
+            state: absent
+            force: true
+          ignore_errors: true
+          
+        - name: Authenticate with Nexus repository
+          docker_login:
+            registry: "{{ nexus_server_ip }}"
+            username: "{{ nexus_username }}"
+            password: "{{ nexus_password }}"
+            reauthorize: true
+          no_log: true
+          
+        - name: Pull latest application image from Nexus
+          docker_image:
+            name: "{{ image_name }}"
+            source: pull
+            force_source: true
+          register: pull_result
+          retries: 3
+          delay: 10
+          until: pull_result is succeeded
+          
+        - name: Deploy new application container
+          docker_container:
+            name: "{{ container_name }}"
+            image: "{{ image_name }}"
+            state: started
+            restart_policy: "{{ container_restart_policy }}"
+            ports:
+              - "{{ app_port }}:{{ app_port }}"
+            memory: "{{ container_memory_limit }}"
+            cpus: "{{ container_cpu_limit }}"
+            env:
+              SPRING_PROFILES_ACTIVE: "{{ spring_profile | default('prod') }}"
+              SERVER_PORT: "{{ app_port }}"
+              NEW_RELIC_LICENSE_KEY: "{{ new_relic_license_key | default('') }}"
+              NEW_RELIC_APP_NAME: "Pet-Adoption-{{ target_environment | default('staging') }}"
+            healthcheck:
+              test: ["CMD", "curl", "-f", "{{ health_check_url }}"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+              start_period: 60s
+            labels:
+              project: "fiifi-pet-adoption-auto-discovery"
+              environment: "{{ target_environment | default('staging') }}"
+              version: "{{ app_version | default('latest') }}"
+              managed_by: "ansible"
+          register: deploy_result
+          
+        - name: Wait for application to be ready
+          uri:
+            url: "{{ health_check_url }}"
+            method: GET
+            status_code: 200
+          register: health_check
+          retries: "{{ health_check_retries }}"
+          delay: "{{ health_check_delay }}"
+          until: health_check.status == 200
+          
+        - name: Verify container is running properly
+          docker_container_info:
+            name: "{{ container_name }}"
+          register: container_info
+          
+        - name: Display deployment summary
+          debug:
+            msg:
+              - "=== Pet Adoption Deployment Summary ==="
+              - "Application: {{ app_name }}"
+              - "Environment: {{ target_environment | default('staging') }}"
+              - "Container: {{ container_name }}"
+              - "Image: {{ image_name }}"
+              - "Status: {{ container_info.container.State.Status }}"
+              - "Health: {{ container_info.container.State.Health.Status | default('N/A') }}"
+              - "Port: {{ app_port }}"
+              - "Memory Limit: {{ container_memory_limit }}"
+              - "CPU Limit: {{ container_cpu_limit }}"
+              - "Deployment Time: {{ ansible_date_time.iso8601 }}"
+
+  post_tasks:
+    - name: Clean up unused Docker resources
+      docker_prune:
+        images: true
+        images_filters:
+          dangling: false
+        containers: true
+        networks: false
+        volumes: false
+      when: cleanup_resources | default(true)
+      
+  rescue:
+    - name: Deployment failure recovery
+      block:
+        - name: Log deployment failure
+          debug:
+            msg: "Deployment failed for {{ app_name }} on {{ inventory_hostname }}"
+            
+        - name: Attempt to start previous container if available
+          docker_container:
+            name: "{{ container_name }}-backup"
+            state: started
+          ignore_errors: true
+          
+        - name: Send failure notification
+          fail:
+            msg: "Pet Adoption deployment failed on {{ inventory_hostname }}. Check logs for details."
+
+# Additional playbook for rolling deployments
+- name: Rolling deployment coordination
+  hosts: localhost
+  gather_facts: false
+  vars:
+    deployment_batch_size: "{{ batch_size | default(1) }}"
+    
+  tasks:
+    - name: Deployment coordination
+      debug:
+        msg: "Coordinating rolling deployment across {{ groups[target_environment | default('staging_webservers')] | length }} servers"
+      when: rolling_deployment | default(false)
+
+# Health check playbook
+- name: Post-deployment health verification
+  hosts: "{{ target_environment | default('staging_webservers') }}"
+  gather_facts: false
+  
+  tasks:
+    - name: Final health check
+      uri:
+        url: "http://{{ inventory_hostname }}:{{ app_port | default(8080) }}/actuator/health"
+        method: GET
+        status_code: 200
+        timeout: 30
+      register: final_health_check
+      retries: 3
+      delay: 5
+      
+    - name: Validate deployment success
+      assert:
+        that:
+          - final_health_check.status == 200
+          - final_health_check.json.status == "UP"
+        fail_msg: "Health check failed for {{ inventory_hostname }}"
+        success_msg: "{{ inventory_hostname }} is healthy and ready"
