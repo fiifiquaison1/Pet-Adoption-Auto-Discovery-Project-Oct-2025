@@ -16,7 +16,7 @@ resource "aws_vpc" "vpc" {
 # Create public subnets
 resource "aws_subnet" "pub_sub" {
   count = length(var.public_subnet_cidrs)
-  
+
   vpc_id                  = aws_vpc.vpc.id
   cidr_block              = var.public_subnet_cidrs[count.index]
   availability_zone       = var.availability_zones[count.index]
@@ -32,7 +32,7 @@ resource "aws_subnet" "pub_sub" {
 # Create private subnets
 resource "aws_subnet" "priv_sub" {
   count = length(var.private_subnet_cidrs)
-  
+
   vpc_id            = aws_vpc.vpc.id
   cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = var.availability_zones[count.index]
@@ -56,8 +56,8 @@ resource "aws_internet_gateway" "igw" {
 # Create Elastic IPs for NAT Gateways
 resource "aws_eip" "nat_eip" {
   count = length(var.public_subnet_cidrs)
-  
-  domain = "vpc"
+
+  domain     = "vpc"
   depends_on = [aws_internet_gateway.igw]
 
   tags = merge(var.tags, {
@@ -68,7 +68,7 @@ resource "aws_eip" "nat_eip" {
 # Create NAT Gateways
 resource "aws_nat_gateway" "nat_gw" {
   count = length(var.public_subnet_cidrs)
-  
+
   allocation_id = aws_eip.nat_eip[count.index].id
   subnet_id     = aws_subnet.pub_sub[count.index].id
   depends_on    = [aws_internet_gateway.igw]
@@ -82,12 +82,12 @@ resource "aws_nat_gateway" "nat_gw" {
 # Create route table for public subnets
 resource "aws_route_table" "pub_rt" {
   vpc_id = aws_vpc.vpc.id
-  
+
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  
+
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-pub-rt"
   })
@@ -96,14 +96,14 @@ resource "aws_route_table" "pub_rt" {
 # Create route tables for private subnets
 resource "aws_route_table" "priv_rt" {
   count = length(var.private_subnet_cidrs)
-  
+
   vpc_id = aws_vpc.vpc.id
-  
+
   route {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat_gw[count.index].id
   }
-  
+
   tags = merge(var.tags, {
     Name = "${var.name_prefix}-priv-rt-${count.index + 1}"
     AZ   = var.availability_zones[count.index]
@@ -113,7 +113,7 @@ resource "aws_route_table" "priv_rt" {
 # Associate public subnets with public route table
 resource "aws_route_table_association" "ass_pub_sub" {
   count = length(var.public_subnet_cidrs)
-  
+
   subnet_id      = aws_subnet.pub_sub[count.index].id
   route_table_id = aws_route_table.pub_rt.id
 }
@@ -121,7 +121,7 @@ resource "aws_route_table_association" "ass_pub_sub" {
 # Associate private subnets with private route tables
 resource "aws_route_table_association" "ass_priv_sub" {
   count = length(var.private_subnet_cidrs)
-  
+
   subnet_id      = aws_subnet.priv_sub[count.index].id
   route_table_id = aws_route_table.priv_rt[count.index].id
 }
