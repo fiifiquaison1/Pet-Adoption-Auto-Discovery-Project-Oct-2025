@@ -46,9 +46,12 @@ fi
 
 # --- S3 BUCKET CREATION ---
 print_status "$BLUE" "📦 Creating or verifying S3 bucket..."
+BUCKET_EXISTS=false
 if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE" 2>/dev/null; then
   print_status "$GREEN" "✅ S3 bucket exists: $BUCKET_NAME"
+  BUCKET_EXISTS=true
 else
+  print_status "$YELLOW" "🔧 Creating S3 bucket..."
   if [[ "$AWS_REGION" == "us-east-1" ]]; then
     aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE"
   else
@@ -56,37 +59,75 @@ else
       --create-bucket-configuration LocationConstraint="$AWS_REGION"
   fi
   print_status "$GREEN" "✅ S3 bucket created: $BUCKET_NAME"
+  print_status "$BLUE" "⏳ Waiting for bucket to be fully available..."
+  sleep 10
 fi
 
-# Enable versioning
-aws s3api put-bucket-versioning \
-  --bucket "$BUCKET_NAME" \
-  --region "$AWS_REGION" \
-  --profile "$AWS_PROFILE" \
-  --versioning-configuration Status=Enabled
-print_status "$GREEN" "✅ Versioning enabled"
+# Enable versioning with retry logic
+print_status "$BLUE" "🔧 Configuring bucket versioning..."
+for i in {1..3}; do
+  if aws s3api put-bucket-versioning \
+    --bucket "$BUCKET_NAME" \
+    --region "$AWS_REGION" \
+    --profile "$AWS_PROFILE" \
+    --versioning-configuration Status=Enabled 2>/dev/null; then
+    print_status "$GREEN" "✅ Versioning enabled"
+    break
+  else
+    if [[ $i -eq 3 ]]; then
+      print_status "$RED" "❌ Failed to enable versioning after 3 attempts"
+      exit 1
+    fi
+    print_status "$YELLOW" "⏳ Versioning failed, retrying in 5 seconds... (attempt $i/3)"
+    sleep 5
+  fi
+done
 
-# Block public access
-aws s3api put-public-access-block \
-  --bucket "$BUCKET_NAME" \
-  --region "$AWS_REGION" \
-  --profile "$AWS_PROFILE" \
-  --public-access-block-configuration \
-  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-print_status "$GREEN" "✅ Public access blocked"
+# Block public access with retry logic
+print_status "$BLUE" "🔒 Configuring public access block..."
+for i in {1..3}; do
+  if aws s3api put-public-access-block \
+    --bucket "$BUCKET_NAME" \
+    --region "$AWS_REGION" \
+    --profile "$AWS_PROFILE" \
+    --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true 2>/dev/null; then
+    print_status "$GREEN" "✅ Public access blocked"
+    break
+  else
+    if [[ $i -eq 3 ]]; then
+      print_status "$YELLOW" "⚠️  Failed to block public access, continuing..."
+      break
+    fi
+    print_status "$YELLOW" "⏳ Public access block failed, retrying... (attempt $i/3)"
+    sleep 3
+  fi
+done
 
-# Tag bucket
-aws s3api put-bucket-tagging \
-  --bucket "$BUCKET_NAME" \
-  --region "$AWS_REGION" \
-  --profile "$AWS_PROFILE" \
-  --tagging "TagSet=[
-    {Key=Project,Value=$PROJECT_TAG},
-    {Key=Environment,Value=shared},
-    {Key=ManagedBy,Value=Script},
-    {Key=Purpose,Value=TerraformState}
-  ]"
-print_status "$GREEN" "✅ Tags applied to bucket"
+# Tag bucket with retry logic
+print_status "$BLUE" "🏷️  Adding bucket tags..."
+for i in {1..3}; do
+  if aws s3api put-bucket-tagging \
+    --bucket "$BUCKET_NAME" \
+    --region "$AWS_REGION" \
+    --profile "$AWS_PROFILE" \
+    --tagging "TagSet=[
+      {Key=Project,Value=$PROJECT_TAG},
+      {Key=Environment,Value=shared},
+      {Key=ManagedBy,Value=Script},
+      {Key=Purpose,Value=TerraformState}
+    ]" 2>/dev/null; then
+    print_status "$GREEN" "✅ Tags applied to bucket"
+    break
+  else
+    if [[ $i -eq 3 ]]; then
+      print_status "$YELLOW" "⚠️  Failed to add tags, continuing..."
+      break
+    fi
+    print_status "$YELLOW" "⏳ Tagging failed, retrying... (attempt $i/3)"
+    sleep 3
+  fi
+done
 
 
 

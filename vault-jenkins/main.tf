@@ -181,48 +181,6 @@ resource "aws_instance" "jenkins-server" {
   })
 }
 
-# Create Route53 hosted zone for the domain
-data "aws_route53_zone" "fiifi_zone" {
-  name = var.domain_name
-}
-
-# Create ACM certificate with DNS validation
-resource "aws_acm_certificate" "fiifi_acm_cert" {
-  domain_name               = var.domain_name
-  subject_alternative_names = ["*.${var.domain_name}"]
-  validation_method         = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = merge(local.common_tags, {
-    Name = "${local.name}-acm-cert"
-  })
-}
-
-# Fetch DNS Validation Records for ACM Certificate
-resource "aws_route53_record" "acm_validation_record" {
-  for_each = {
-    for dvo in aws_acm_certificate.fiifi_acm_cert.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-
-  # Create DNS Validation Record for ACM Certificate
-  zone_id         = data.aws_route53_zone.fiifi_zone.zone_id
-  allow_overwrite = true
-  name            = each.value.name
-  type            = each.value.type
-  ttl             = 60
-  records         = [each.value.record]
-  depends_on      = [aws_acm_certificate.fiifi_acm_cert]
-}
-
-
-
 # Create Security group for the jenkins elb
 resource "aws_security_group" "jenkins-elb-sg" {
   name        = "${local.name}-jenkins-elb-sg"
@@ -269,7 +227,7 @@ resource "aws_elb" "elb_jenkins" {
     instance_protocol  = "HTTP"
     lb_port            = 443
     lb_protocol        = "HTTPS"
-    ssl_certificate_id = "arn:aws:acm:eu-west-3:174790195052:certificate/937c6b58-1caf-4c36-a2bc-862ba9200913"
+    ssl_certificate_id = aws_acm_certificate_validation.jenkins_cert_validation.certificate_arn
   }
 
   health_check {
@@ -507,7 +465,7 @@ resource "aws_elb" "vault_elb" {
     instance_protocol  = "HTTP"
     lb_port            = 443
     lb_protocol        = "HTTPS"
-    ssl_certificate_id = "arn:aws:acm:eu-west-3:174790195052:certificate/937c6b58-1caf-4c36-a2bc-862ba9200913"
+    ssl_certificate_id = aws_acm_certificate_validation.vault_cert_validation.certificate_arn
   }
 
   health_check {
@@ -531,8 +489,8 @@ resource "aws_elb" "vault_elb" {
 
 # Create Route 53 record for vault server
 resource "aws_route53_record" "vault_record" {
-  zone_id = data.aws_route53_zone.fiifi_zone.zone_id
-  name    = "vault.${var.domain_name}"
+  zone_id = data.aws_route53_zone.primary.zone_id
+  name    = "vault.fiifiquaison.space"
   type    = "A"
 
   alias {
@@ -544,8 +502,8 @@ resource "aws_route53_record" "vault_record" {
 
 # Create Route 53 record for jenkins server
 resource "aws_route53_record" "jenkins_record" {
-  zone_id = data.aws_route53_zone.fiifi_zone.zone_id
-  name    = "jenkins.${var.domain_name}"
+  zone_id = data.aws_route53_zone.primary.zone_id
+  name    = "jenkins.fiifiquaison.space"
   type    = "A"
 
   alias {
