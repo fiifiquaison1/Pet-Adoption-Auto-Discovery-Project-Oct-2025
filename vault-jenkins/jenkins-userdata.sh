@@ -45,7 +45,7 @@ EOF
 yum install -y trivy
 
 # Install SSM Agent
-dnf install -y amazon-ssm-agent
+yum install -y amazon-ssm-agent
 systemctl enable amazon-ssm-agent
 systemctl start amazon-ssm-agent
 
