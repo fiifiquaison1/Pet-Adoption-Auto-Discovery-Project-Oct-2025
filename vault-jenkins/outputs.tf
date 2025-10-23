@@ -1,20 +1,24 @@
-output "jenkins_public_ip" {
-  value = aws_instance.jenkins-server.public_ip
-}
+# Fiifi Pet Adoption Auto Discovery Project - Outputs
+# Essential outputs for accessing and managing the infrastructure
 
-output "vault_public_ip" {
-  value = aws_instance.vault.public_ip
-}
-
+# Access URLs
 output "jenkins_url" {
-  value = "https://jenkins.${var.domain_name}"
+  value       = "https://jenkins.${var.domain_name}"
+  description = "Jenkins web interface URL"
 }
 
 output "vault_url" {
-  value = "https://vault.${var.domain_name}"
+  value       = "https://vault.${var.domain_name}"
+  description = "Vault web interface URL"
 }
 
-output "route53_name_servers" {
-  value       = aws_route53_zone.fiifi_zone.name_servers
-  description = "Name servers for the Route53 hosted zone - configure these in your domain registrar"
+# Public IPs (for troubleshooting)
+output "jenkins_public_ip" {
+  value       = aws_instance.jenkins-server.public_ip
+  description = "Jenkins server public IP"
+}
+
+output "vault_public_ip" {
+  value       = aws_instance.vault.public_ip
+  description = "Vault server public IP"
 }

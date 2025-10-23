@@ -1,5 +1,8 @@
+# Fiifi Pet Adoption Auto Discovery Project - Variables
+# Core configuration variables for Jenkins and Vault infrastructure
+
 variable "domain_name" {
-  description = "The domain name for our pet adoption project"
+  description = "Domain name for pet adoption project"
   type        = string
   default     = "fiifiquaison.space"
 }
@@ -11,7 +14,7 @@ variable "aws_region" {
 }
 
 variable "environment" {
-  description = "Environment name (dev, staging, prod)"
+  description = "Environment name"
   type        = string
   default     = "dev"
 }

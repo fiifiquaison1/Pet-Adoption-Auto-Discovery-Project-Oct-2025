@@ -5,13 +5,20 @@
 
 set -euo pipefail
 
-# Configuration variables (will be overridden by bucket-info.txt if it exists)
-BUCKET_NAME="auto-discovery-fiifi-1986"
+# ============================================
+# Configuration variables
+# ============================================
+BUCKET_NAME="auto-discovery-fiifi-86"
 AWS_REGION="eu-west-3"
-AWS_PROFILE="pet-adoption"
+AWS_PROFILE="default"
 PROJECT_TAG="Fiifi-Pet-Adoption-Auto-Discovery"
 
-# Color codes for output
+# Auto-confirm destruction (set to true to skip prompt)
+AUTO_CONFIRM="${AUTO_CONFIRM:-false}"
+
+# ============================================
+# Color codes
+# ============================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -19,12 +26,12 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 print_status() {
-    local color="$1"
-    local message="$2"
-    echo -e "${color}${message}${NC}"
+    echo -e "${1}${2}${NC}"
 }
 
-# Check if AWS profile exists
+# ============================================
+# Checks
+# ============================================
 check_aws_profile() {
     if ! aws configure list-profiles 2>/dev/null | grep -q "^${AWS_PROFILE}$"; then
         print_status "$YELLOW" "⚠️  AWS profile '${AWS_PROFILE}' not found, using default profile"
@@ -32,22 +39,23 @@ check_aws_profile() {
     fi
 }
 
-# Check if AWS CLI is available
 check_aws_cli() {
-    if ! command -v aws &> /dev/null; then
-        print_status "$RED" "❌ AWS CLI is not installed. Please install it first."
+    if ! command -v aws &>/dev/null; then
+        print_status "$RED" "❌ AWS CLI not installed."
         exit 1
     fi
 }
 
-# Check if jq is available for JSON processing
 check_jq() {
-    if ! command -v jq &> /dev/null; then
-        print_status "$RED" "❌ jq is not installed. Please install it first for JSON processing."
+    if ! command -v jq &>/dev/null; then
+        print_status "$RED" "❌ jq not installed."
         exit 1
     fi
 }
 
+# ============================================
+# Start
+# ============================================
 echo "🗑️ Pet Adoption Auto Discovery - Infrastructure Destruction"
 echo "=========================================================="
 
@@ -63,146 +71,85 @@ echo "Region: $AWS_REGION"
 echo "Profile: $AWS_PROFILE"
 echo ""
 
-# Check prerequisites
 check_aws_cli
 check_jq
 check_aws_profile
 
-print_status "$YELLOW" "⚠️  WARNING: This will permanently destroy all infrastructure and data!"
-read -p "Are you sure you want to continue? (yes/no): " confirm
-
-if [[ "$confirm" != "yes" ]]; then
-    print_status "$BLUE" "🛑 Operation cancelled"
-    exit 0
+# ============================================
+# Confirm destruction
+# ============================================
+if [[ "$AUTO_CONFIRM" != "true" ]]; then
+    print_status "$YELLOW" "⚠️  WARNING: This will permanently destroy all infrastructure and data!"
+    read -p "Are you sure you want to continue? (yes/no): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_status "$BLUE" "🛑 Operation cancelled"
+        exit 0
+    fi
+else
+    print_status "$BLUE" "⚙️  Auto-confirm enabled. Proceeding without prompt..."
 fi
 
 echo ""
 
-# Step 1: Destroy Vault and Jenkins infrastructure
+# ============================================
+# Step 1: Destroy Terraform infrastructure
+# ============================================
 print_status "$BLUE" "🏗️ Destroying Jenkins and Vault server infrastructure..."
 
-if [[ ! -d "vault-jenkins" ]]; then
-    print_status "$YELLOW" "⚠️  vault-jenkins directory not found, skipping Terraform destroy"
-else
+if [[ -d "vault-jenkins" ]]; then
     cd vault-jenkins
-    
-    # Check if Terraform is initialized
     if [[ ! -d ".terraform" ]]; then
         print_status "$BLUE" "🔧 Initializing Terraform..."
-        if terraform init; then
-            print_status "$GREEN" "✅ Terraform initialized"
-        else
-            print_status "$RED" "❌ Terraform initialization failed"
-            cd ..
-            exit 1
-        fi
+        terraform init
     fi
-    
-    # Destroy infrastructure
-    print_status "$BLUE" "💥 Destroying Terraform infrastructure..."
-    if terraform destroy -auto-approve; then
-        print_status "$GREEN" "✅ Infrastructure destroyed successfully"
-    else
-        print_status "$RED" "❌ Terraform destroy failed"
-        cd ..
-        exit 1
-    fi
-    
-    # Clean up Terraform files
-    print_status "$BLUE" "🧹 Cleaning up Terraform state files..."
-    rm -f terraform.tfstate*
-    rm -f .terraform.lock.hcl
-    rm -rf .terraform/ 2>/dev/null || true
-    
-    # Security cleanup - remove any generated keys
-    find . -name "*.pem" -type f -delete 2>/dev/null || true
-    
+    print_status "$BLUE" "💥 Running Terraform destroy..."
+    terraform destroy -auto-approve
+    rm -f terraform.tfstate* .terraform.lock.hcl
+    rm -rf .terraform/
+    find . -name "*.pem" -delete 2>/dev/null || true
     cd ..
+else
+    print_status "$YELLOW" "⚠️  vault-jenkins directory not found, skipping Terraform destroy"
 fi
 
+# ============================================
 # Step 2: Delete S3 bucket
+# ============================================
 print_status "$BLUE" "🪣 Processing S3 bucket deletion..."
 
-# Check if bucket exists
-if ! aws s3api head-bucket --bucket "$BUCKET_NAME" --profile "$AWS_PROFILE" --region "$AWS_REGION" 2>/dev/null; then
-    print_status "$YELLOW" "⚠️  Bucket $BUCKET_NAME not found or not accessible"
-    print_status "$GREEN" "✅ S3 cleanup complete (bucket doesn't exist)"
-else
-    print_status "$YELLOW" "⚠️  Deleting all objects in $BUCKET_NAME. This process is irreversible..."
-    
-    # List all object versions and delete markers
-    print_status "$BLUE" "📋 Listing all object versions and delete markers..."
-    DELETE_LIST=$(aws s3api list-object-versions \
-        --bucket "$BUCKET_NAME" \
-        --profile "$AWS_PROFILE" \
-        --region "$AWS_REGION" \
-        --output json)
-    
-    # Extract objects to delete using jq
+if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE" 2>/dev/null; then
+    print_status "$YELLOW" "⚠️  Deleting all versions and markers in bucket..."
+    DELETE_LIST=$(aws s3api list-object-versions --bucket "$BUCKET_NAME" --output json --region "$AWS_REGION" --profile "$AWS_PROFILE")
     OBJECTS_TO_DELETE=$(echo "$DELETE_LIST" | jq '{
-        Objects: (
-            [.Versions[]?, .DeleteMarkers[]?]
-            | map({Key: .Key, VersionId: .VersionId})
-        ),
+        Objects: ([.Versions[]?, .DeleteMarkers[]?] | map({Key: .Key, VersionId: .VersionId})),
         Quiet: true
     }')
-    
-    # Count number of deletable items
     NUM_OBJECTS=$(echo "$OBJECTS_TO_DELETE" | jq '.Objects | length')
-    
-    # Delete objects if there are any
-    if [ "$NUM_OBJECTS" -gt 0 ]; then
-        print_status "$BLUE" "🗑️ Deleting $NUM_OBJECTS objects from bucket: $BUCKET_NAME..."
-        if aws s3api delete-objects \
-            --bucket "$BUCKET_NAME" \
-            --delete "$OBJECTS_TO_DELETE" \
-            --region "$AWS_REGION" \
-            --profile "$AWS_PROFILE" > /dev/null; then
-            print_status "$GREEN" "✅ Object deletion complete"
-        else
-            print_status "$RED" "❌ Failed to delete some objects"
-        fi
-    else
-        print_status "$BLUE" "📭 No objects or versions found in $BUCKET_NAME"
+
+    if [[ "$NUM_OBJECTS" -gt 0 ]]; then
+        aws s3api delete-objects --bucket "$BUCKET_NAME" --delete "$OBJECTS_TO_DELETE" --region "$AWS_REGION" --profile "$AWS_PROFILE" >/dev/null
+        print_status "$GREEN" "✅ Deleted $NUM_OBJECTS objects"
     fi
-    
-    # Attempt to delete the empty bucket
-    print_status "$BLUE" "🗑️ Deleting bucket: $BUCKET_NAME..."
-    if aws s3api delete-bucket \
-        --bucket "$BUCKET_NAME" \
-        --region "$AWS_REGION" \
-        --profile "$AWS_PROFILE"; then
-        print_status "$GREEN" "✅ Bucket $BUCKET_NAME deleted successfully"
-    else
-        print_status "$RED" "❌ Failed to delete bucket $BUCKET_NAME"
-        exit 1
-    fi
+
+    aws s3api delete-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE"
+    print_status "$GREEN" "✅ Bucket $BUCKET_NAME deleted successfully"
+else
+    print_status "$YELLOW" "⚠️  Bucket not found, skipping deletion"
 fi
 
-# Step 3: Clean up local files
+# ============================================
+# Step 3: Local cleanup
+# ============================================
 print_status "$BLUE" "🧹 Cleaning up local files..."
-
-# Remove bucket info file
-if [[ -f "bucket-info.txt" ]]; then
-    rm -f bucket-info.txt
-    print_status "$GREEN" "✅ Removed bucket-info.txt"
-fi
-
-# Remove any remaining sensitive files
-find . -name "*.pem" -type f -delete 2>/dev/null || true
-rm -f *.log 2>/dev/null || true
-
+rm -f bucket-info.txt *.log 2>/dev/null || true
+find . -name "*.pem" -delete 2>/dev/null || true
 print_status "$GREEN" "🔒 Local cleanup completed"
 
 echo ""
-print_status "$GREEN" "🎉 Complete! All infrastructure and resources have been destroyed"
-print_status "$BLUE" "📝 Summary of actions:"
+print_status "$GREEN" "🎉 Complete! All infrastructure and resources destroyed successfully."
+print_status "$BLUE" "📝 Summary:"
 echo "  ✅ Terraform infrastructure destroyed"
-echo "  ✅ S3 bucket and all contents deleted"
-echo "  ✅ Local state files cleaned up"
-echo "  ✅ Security sensitive files removed"
+echo "  ✅ S3 bucket and contents deleted"
+echo "  ✅ Local files cleaned up"
 echo ""
-print_status "$YELLOW" "💡 Remember to:"
-echo "  - Verify all resources are deleted in AWS Console"
-echo "  - Check for any remaining costs in AWS Billing"
-echo "  - Update any documentation or references"
+print_status "$YELLOW" "💡 Tip: Run with 'AUTO_CONFIRM=true' to skip confirmation automatically."

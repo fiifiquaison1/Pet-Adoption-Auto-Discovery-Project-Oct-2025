@@ -1,182 +1,131 @@
 #!/bin/bash
 
-# Pet Adoption Auto Discovery Project - S3 Bucket Creation and Deployment Script
-# This script creates S3 bucket, enables versioning, and deploys infrastructure
+# Pet Adoption Auto Discovery Project - Automated S3 Bucket Creation & Deployment
+# Fully non-interactive version
 
 set -euo pipefail
 
-# Configuration variables
-BUCKET_NAME="auto-discovery-fiifi-1986"
+# --- CONFIGURATION ---
+BUCKET_NAME="auto-discovery-fiifi-86"
 AWS_REGION="eu-west-3"
-AWS_PROFILE="pet-adoption"
+AWS_PROFILE="default"
 PROJECT_TAG="Fiifi-Pet-Adoption-Auto-Discovery"
+LOG_FILE="create.log"
 
-# Color codes for output
+# --- COLORS ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-print_status() {
-    local color="$1"
-    local message="$2"
-    echo -e "${color}${message}${NC}"
-}
+# --- HELPERS ---
+print_status() { echo -e "${1}${2}${NC}"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
 
-# Check if AWS profile exists
-check_aws_profile() {
-    if ! aws configure list-profiles 2>/dev/null | grep -q "^${AWS_PROFILE}$"; then
-        print_status "$YELLOW" "⚠️  AWS profile '${AWS_PROFILE}' not found, using default profile"
-        AWS_PROFILE="default"
-    fi
-}
-
-# Check if AWS CLI is available
-check_aws_cli() {
-    if ! command -v aws &> /dev/null; then
-        print_status "$RED" "❌ AWS CLI is not installed. Please install it first."
-        exit 1
-    fi
-}
-
-echo "🪣 Pet Adoption Auto Discovery - S3 Bucket Creation and Deployment"
-echo "=================================================================="
-echo "Bucket: $BUCKET_NAME"
-echo "Region: $AWS_REGION"
-echo "Profile: $AWS_PROFILE"
+echo "🪣 Pet Adoption Auto Discovery - S3 + Jenkins/Vault Setup"
+echo "=========================================================="
+print_status "$BLUE" "Bucket: $BUCKET_NAME | Region: $AWS_REGION | Profile: $AWS_PROFILE"
 echo ""
 
-# Check prerequisites
-check_aws_cli
-check_aws_profile
-
-print_status "$BLUE" "📦 Creating S3 bucket for Terraform state..."
-
-# Create S3 bucket with proper region configuration
-if [[ "$AWS_REGION" == "us-east-1" ]]; then
-    # us-east-1 doesn't need LocationConstraint
-    aws_create_cmd="aws s3api create-bucket --bucket \"$BUCKET_NAME\" --region \"$AWS_REGION\" --profile \"$AWS_PROFILE\""
-else
-    # Other regions need LocationConstraint
-    aws_create_cmd="aws s3api create-bucket --bucket \"$BUCKET_NAME\" --region \"$AWS_REGION\" --profile \"$AWS_PROFILE\" --create-bucket-configuration LocationConstraint=\"$AWS_REGION\""
+# --- PREREQUISITE CHECKS ---
+if ! command -v aws &>/dev/null; then
+  print_status "$RED" "❌ AWS CLI not installed. Install AWS CLI v2 first."
+  exit 1
 fi
 
-if eval $aws_create_cmd; then
-    print_status "$GREEN" "✅ S3 bucket created: $BUCKET_NAME"
+if ! command -v terraform &>/dev/null; then
+  print_status "$RED" "❌ Terraform not installed. Please install Terraform."
+  exit 1
+fi
+
+if ! aws configure list-profiles 2>/dev/null | grep -q "^${AWS_PROFILE}$"; then
+  print_status "$YELLOW" "⚠️ AWS profile '${AWS_PROFILE}' not found, defaulting to 'default'"
+  AWS_PROFILE="default"
+fi
+
+# --- S3 BUCKET CREATION ---
+print_status "$BLUE" "📦 Creating or verifying S3 bucket..."
+if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE" 2>/dev/null; then
+  print_status "$GREEN" "✅ S3 bucket exists: $BUCKET_NAME"
 else
-    print_status "$RED" "❌ Failed to create S3 bucket"
-    exit 1
+  if [[ "$AWS_REGION" == "us-east-1" ]]; then
+    aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE"
+  else
+    aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" --profile "$AWS_PROFILE" \
+      --create-bucket-configuration LocationConstraint="$AWS_REGION"
+  fi
+  print_status "$GREEN" "✅ S3 bucket created: $BUCKET_NAME"
 fi
 
 # Enable versioning
-print_status "$BLUE" "🔄 Enabling bucket versioning..."
-if aws s3api put-bucket-versioning \
-    --bucket "$BUCKET_NAME" \
-    --region "$AWS_REGION" \
-    --profile "$AWS_PROFILE" \
-    --versioning-configuration Status=Enabled; then
-    print_status "$GREEN" "✅ Bucket versioning enabled"
-else
-    print_status "$RED" "❌ Failed to enable versioning"
-    exit 1
-fi
-
-# Add security configurations
-print_status "$BLUE" "🔒 Configuring bucket security..."
+aws s3api put-bucket-versioning \
+  --bucket "$BUCKET_NAME" \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE" \
+  --versioning-configuration Status=Enabled
+print_status "$GREEN" "✅ Versioning enabled"
 
 # Block public access
-if aws s3api put-public-access-block \
-    --bucket "$BUCKET_NAME" \
-    --profile "$AWS_PROFILE" \
-    --public-access-block-configuration \
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true; then
-    print_status "$GREEN" "✅ Public access blocked"
-else
-    print_status "$YELLOW" "⚠️  Failed to block public access"
-fi
+aws s3api put-public-access-block \
+  --bucket "$BUCKET_NAME" \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE" \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+print_status "$GREEN" "✅ Public access blocked"
 
-# Add tags
-if aws s3api put-bucket-tagging \
-    --bucket "$BUCKET_NAME" \
-    --profile "$AWS_PROFILE" \
-    --tagging "TagSet=[
-        {Key=Project,Value=$PROJECT_TAG},
-        {Key=Environment,Value=shared},
-        {Key=ManagedBy,Value=Script},
-        {Key=Purpose,Value=TerraformState}
-    ]"; then
-    print_status "$GREEN" "✅ Bucket tagged"
-else
-    print_status "$YELLOW" "⚠️  Failed to add tags"
-fi
+# Tag bucket
+aws s3api put-bucket-tagging \
+  --bucket "$BUCKET_NAME" \
+  --region "$AWS_REGION" \
+  --profile "$AWS_PROFILE" \
+  --tagging "TagSet=[
+    {Key=Project,Value=$PROJECT_TAG},
+    {Key=Environment,Value=shared},
+    {Key=ManagedBy,Value=Script},
+    {Key=Purpose,Value=TerraformState}
+  ]"
+print_status "$GREEN" "✅ Tags applied to bucket"
 
-# Save bucket configuration
-print_status "$BLUE" "💾 Saving bucket configuration..."
-cat > bucket-info.txt << EOF
-# Pet Adoption Auto Discovery - S3 Bucket Configuration
-# Generated on: $(date)
 
+
+# --- SAVE CONFIGURATION ---
+cat > bucket-info.txt <<EOF
+# Pet Adoption Auto Discovery - Terraform Backend Info
 BUCKET_NAME=$BUCKET_NAME
 AWS_REGION=$AWS_REGION
 AWS_PROFILE=$AWS_PROFILE
 PROJECT_TAG=$PROJECT_TAG
-
-# Use this information to configure Terraform backend
-# backend "s3" {
-#   bucket = "$BUCKET_NAME"
-#   key    = "terraform.tfstate"
-#   region = "$AWS_REGION"
-# }
 EOF
+print_status "$GREEN" "💾 Saved configuration: bucket-info.txt"
 
-print_status "$GREEN" "✅ S3 bucket setup completed!"
-print_status "$BLUE" "📝 Configuration saved to: bucket-info.txt"
-
-# Deploy Vault and Jenkins infrastructure
-print_status "$BLUE" "🚀 Creating Vault and Jenkins Server..."
-
+# --- DEPLOY INFRASTRUCTURE ---
 if [[ ! -d "vault-jenkins" ]]; then
-    print_status "$RED" "❌ vault-jenkins directory not found"
-    exit 1
+  print_status "$RED" "❌ vault-jenkins directory not found."
+  exit 1
 fi
 
 cd vault-jenkins
 
-# Initialize Terraform
 print_status "$BLUE" "🔧 Initializing Terraform..."
-if terraform init; then
-    print_status "$GREEN" "✅ Terraform initialized"
-else
-    print_status "$RED" "❌ Terraform initialization failed"
-    exit 1
-fi
+terraform init -reconfigure \
+               -backend-config="bucket=$BUCKET_NAME" \
+               -backend-config="key=terraform.tfstate" \
+               -backend-config="region=$AWS_REGION" \
+               -backend-config="profile=$AWS_PROFILE"
 
-# Validate configuration
 print_status "$BLUE" "🔍 Validating Terraform configuration..."
-if terraform validate; then
-    print_status "$GREEN" "✅ Terraform configuration valid"
-else
-    print_status "$RED" "❌ Terraform validation failed"
-    exit 1
-fi
+terraform validate
 
-# Apply deployment
-print_status "$BLUE" "🚀 Applying Terraform deployment..."
-if terraform apply -auto-approve; then
-    print_status "$GREEN" "🎉 Deployment completed successfully!"
-    
-    # Show outputs
-    echo ""
-    print_status "$BLUE" "📊 Deployment Outputs:"
-    terraform output
-else
-    print_status "$RED" "❌ Terraform deployment failed"
-    exit 1
-fi
+print_status "$BLUE" "🚀 Applying Terraform deployment (auto-approved)..."
+terraform apply -auto-approve
 
-print_status "$GREEN" "✅ Complete! Infrastructure deployed successfully!"
-print_status "$BLUE" "📝 Next steps:"
-echo "  - Check the deployment outputs above"
-echo "  - Verify resources in AWS Console"
-echo "  - Use destroy-s3-bucket.sh to clean up when done"
+print_status "$GREEN" "🎉 Deployment completed successfully!"
+print_status "$BLUE" "📊 Terraform Outputs:"
+terraform output || true
+
+cd ..
+
+print_status "$GREEN" "✅ All steps completed successfully!"
+print_status "$BLUE" "📝 Logs stored in: $LOG_FILE"

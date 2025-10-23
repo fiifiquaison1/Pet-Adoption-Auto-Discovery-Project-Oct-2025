@@ -1,5 +1,5 @@
-# Fiifi Pet Adoption Auto Discovery Project - Vault-Jenkins Infrastructure
-# Main Terraform configuration for eu-west-3 region
+# Fiifi Pet Adoption Auto Discovery Project
+# Jenkins and Vault infrastructure with SSL and Route53
 
 locals {
   name = "fiifi-pet-adoption-auto-discovery"
@@ -8,7 +8,6 @@ locals {
     ManagedBy   = "Terraform"
     Project     = "Fiifi-Pet-Adoption-Auto-Discovery"
     Owner       = "fiifiquaison1"
-    CreatedDate = "2025-10-18"
   }
 }
 
@@ -19,7 +18,6 @@ module "vpc" {
   name_prefix          = local.name
   vpc_cidr             = "10.0.0.0/16"
   public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
   availability_zones   = ["eu-west-3a", "eu-west-3b"]
   tags                 = local.common_tags
 }
@@ -163,7 +161,7 @@ resource "aws_instance" "jenkins-server" {
     })
   }
 
-  user_data = base64encode(file("./jenkins-userdata.sh"))
+  user_data_base64 = base64encode(file("./jenkins-userdata.sh"))
 
   metadata_options {
     http_tokens = "required"
@@ -172,12 +170,7 @@ resource "aws_instance" "jenkins-server" {
   timeouts {
     create = "10m"
     update = "5m"
-    delete = "10m"  # Increased delete timeout
-  }
-
-  # Prevent accidental deletion in production
-  lifecycle {
-    prevent_destroy = false  # Set to true for production
+    delete = "10m"
   }
 
   tags = merge(local.common_tags, {
@@ -189,12 +182,8 @@ resource "aws_instance" "jenkins-server" {
 }
 
 # Create Route53 hosted zone for the domain
-resource "aws_route53_zone" "fiifi_zone" {
+data "aws_route53_zone" "fiifi_zone" {
   name = var.domain_name
-
-  tags = merge(local.common_tags, {
-    Name = "${local.name}-hosted-zone"
-  })
 }
 
 # Create ACM certificate with DNS validation
@@ -223,7 +212,7 @@ resource "aws_route53_record" "acm_validation_record" {
   }
 
   # Create DNS Validation Record for ACM Certificate
-  zone_id         = aws_route53_zone.fiifi_zone.zone_id
+  zone_id         = data.aws_route53_zone.fiifi_zone.zone_id
   allow_overwrite = true
   name            = each.value.name
   type            = each.value.type
@@ -232,21 +221,7 @@ resource "aws_route53_record" "acm_validation_record" {
   depends_on      = [aws_acm_certificate.fiifi_acm_cert]
 }
 
-# Validate the ACM Certificate after DNS Record Creation
-resource "aws_acm_certificate_validation" "fiifi_cert_validation" {
-  certificate_arn         = aws_acm_certificate.fiifi_acm_cert.arn
-  validation_record_fqdns = [for record in aws_route53_record.acm_validation_record : record.fqdn]
-  depends_on              = [aws_acm_certificate.fiifi_acm_cert]
 
-  timeouts {
-    create = "20m"  # Increased timeout for DNS propagation
-  }
-
-  lifecycle {
-    # Allow recreation if validation fails
-    create_before_destroy = true
-  }
-}
 
 # Create Security group for the jenkins elb
 resource "aws_security_group" "jenkins-elb-sg" {
@@ -290,27 +265,19 @@ resource "aws_elb" "elb_jenkins" {
   subnets         = module.vpc.public_subnet_ids
 
   listener {
-    instance_port     = 8080
-    instance_protocol = "HTTP"
-    lb_port           = 80
-    lb_protocol       = "HTTP"
+    instance_port      = 8080
+    instance_protocol  = "HTTP"
+    lb_port            = 443
+    lb_protocol        = "HTTPS"
+    ssl_certificate_id = "arn:aws:acm:eu-west-3:174790195052:certificate/937c6b58-1caf-4c36-a2bc-862ba9200913"
   }
-
-  # Temporarily comment out HTTPS listener until DNS is delegated
-  # listener {
-  #   instance_port      = 8080
-  #   instance_protocol  = "HTTP"
-  #   lb_port            = 443
-  #   lb_protocol        = "HTTPS"
-  #   ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
-  # }
 
   health_check {
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 60
     timeout             = 10
-    target              = "TCP:8080"
+    target              = "HTTP:8080/login"
   }
 
   instances                   = [aws_instance.jenkins-server.id]
@@ -390,12 +357,6 @@ resource "aws_instance" "vault" {
     delete = "10m"  # Increased delete timeout
   }
 
-  # Prevent accidental deletion in production
-  lifecycle {
-    prevent_destroy = false  # Set to true for production
-  }
-
-  # Tag the instance for easy identification
   tags = merge(local.common_tags, {
     Name = "${local.name}-vault-server"
     Type = "Vault-Server"
@@ -542,26 +503,18 @@ resource "aws_elb" "vault_elb" {
   security_groups = [aws_security_group.vault_elb_sg.id]
 
   listener {
-    instance_port     = 8200
-    instance_protocol = "HTTP"
-    lb_port           = 80
-    lb_protocol       = "HTTP"
+    instance_port      = 8200
+    instance_protocol  = "HTTP"
+    lb_port            = 443
+    lb_protocol        = "HTTPS"
+    ssl_certificate_id = "arn:aws:acm:eu-west-3:174790195052:certificate/937c6b58-1caf-4c36-a2bc-862ba9200913"
   }
-
-  # Temporarily comment out HTTPS listener until DNS is delegated
-  # listener {
-  #   instance_port      = 8200
-  #   instance_protocol  = "HTTP"
-  #   lb_port            = 443
-  #   lb_protocol        = "HTTPS"
-  #   ssl_certificate_id = aws_acm_certificate_validation.fiifi_cert_validation.certificate_arn
-  # }
 
   health_check {
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 10
-    target              = "TCP:8200"
+    target              = "HTTP:8200/v1/sys/health"
     interval            = 60
   }
 
@@ -578,7 +531,7 @@ resource "aws_elb" "vault_elb" {
 
 # Create Route 53 record for vault server
 resource "aws_route53_record" "vault_record" {
-  zone_id = aws_route53_zone.fiifi_zone.zone_id
+  zone_id = data.aws_route53_zone.fiifi_zone.zone_id
   name    = "vault.${var.domain_name}"
   type    = "A"
 
@@ -591,7 +544,7 @@ resource "aws_route53_record" "vault_record" {
 
 # Create Route 53 record for jenkins server
 resource "aws_route53_record" "jenkins_record" {
-  zone_id = aws_route53_zone.fiifi_zone.zone_id
+  zone_id = data.aws_route53_zone.fiifi_zone.zone_id
   name    = "jenkins.${var.domain_name}"
   type    = "A"
 
