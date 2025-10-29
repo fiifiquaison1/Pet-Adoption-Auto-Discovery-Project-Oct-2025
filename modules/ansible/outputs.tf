@@ -25,3 +25,8 @@ output "ansible_instance_profile_name" {
   description = "Name of the IAM instance profile for the Ansible server"
   value       = aws_iam_instance_profile.ansible_profile.name
 }
+
+output "ansible_sg" {
+  description = "Ansible security group ID"
+  value       = aws_security_group.ansible_sg.id
+}

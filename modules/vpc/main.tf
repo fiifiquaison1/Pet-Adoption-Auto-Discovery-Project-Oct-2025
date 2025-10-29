@@ -55,8 +55,7 @@ resource "aws_internet_gateway" "igw" {
 
 # Create Elastic IPs for NAT Gateways
 resource "aws_eip" "nat_eip" {
-  count = length(var.public_subnet_cidrs)
-
+  count      = length(var.public_subnet_cidrs)
   domain     = "vpc"
   depends_on = [aws_internet_gateway.igw]
 

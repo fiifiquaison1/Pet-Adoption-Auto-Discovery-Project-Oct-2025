@@ -1,3 +1,8 @@
+variable "color" {
+  type        = string
+  description = "Color code for output in Nexus user data script."
+  default     = "\u001b[0;32m"
+}
 # Nexus Module - Variable Definitions
 # Input variables for the Nexus module
 
@@ -52,3 +57,21 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "nexus_version" {
+  type        = string
+  description = "The Nexus version to install"
+  default     = "3.49.0"
+}
+variable "NC" {
+  type        = string
+  description = "ANSI reset color code for Nexus user-data"
+  default     = "\u001b[0m" # Keeping only the first default value
+}
+
+variable "message" {
+  type        = string
+  description = "Message to display in Nexus user-data"
+  default     = "Nexus server setup in progress"
+}
+ # File ends cleanly here

@@ -88,7 +88,7 @@ resource "aws_launch_template" "bastion-lt" {
   }
 
   user_data = base64encode(templatefile("${path.module}/bastion-userdata.sh", {
-    private_key    = var.private_key
+  private_key    = file("C:/Users/fiifi/my-personal-proj/Pet-Adoption-Auto-Discovery-Project-Oct-2025/files/fiifi-pet-adoption-auto-discovery-key1.pem")
     nr_license_key = var.nr_license_key
     nr_account_id  = var.nr_account_id
     region         = var.region

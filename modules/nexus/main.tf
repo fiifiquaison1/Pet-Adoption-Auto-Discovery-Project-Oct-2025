@@ -74,6 +74,15 @@ resource "aws_security_group" "nexus-sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Ingress rule: Allow SSH (port 22) from anywhere (testing only)
+  ingress {
+    description = "SSH access for provisioning (testing only)"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # Egress rule: Allow all outbound traffic
   egress {
     from_port   = 0
@@ -129,7 +138,12 @@ resource "aws_instance" "nexus-server" {
   vpc_security_group_ids      = [aws_security_group.nexus-sg.id]
   key_name                    = var.keypair
   subnet_id                   = var.subnet_id
-  user_data                   = templatefile("${path.module}/nexus-userdata.sh", {})
+  user_data                   = templatefile("${path.module}/nexus-userdata.sh", {
+    NEXUS_VERSION = var.nexus_version
+    color         = var.color
+    message       = var.message
+    NC            = var.NC
+  })
   iam_instance_profile        = aws_iam_instance_profile.nexus-profile.name
   associate_public_ip_address = true
 
@@ -140,7 +154,7 @@ resource "aws_instance" "nexus-server" {
 
 # Load Balancer for Nexus
 resource "aws_elb" "nexus-elb" {
-  name            = "${var.name_prefix}-nexus-elb"
+  name            = "petadopt-nexus-elb"
   security_groups = [aws_security_group.lb-sg.id]
   subnets         = var.public_subnet_ids
 
@@ -167,7 +181,7 @@ resource "aws_elb" "nexus-elb" {
   connection_draining_timeout = 400
 
   tags = merge(var.tags, {
-    Name = "${var.name_prefix}-nexus-elb"
+  Name = "petadopt-nexus-elb"
   })
 }
 
@@ -188,16 +202,20 @@ resource "aws_route53_record" "nexus" {
 resource "null_resource" "update-jenkins-docker" {
   depends_on = [aws_instance.nexus-server]
 
-  provisioner "local-exec" {
-    command     = <<-EOF
-#!/bin/bash
-sudo cat <<EOT>> /etc/docker/daemon.json
-{
-  "insecure-registries" : ["${aws_instance.nexus-server.public_ip}:8085"]
-}
-EOT
-sudo systemctl restart docker
-EOF
-    interpreter = ["bash", "-c"]
+  provisioner "remote-exec" {
+    connection {
+      type        = "ssh"
+      host        = aws_instance.nexus-server.public_ip
+      user        = "ubuntu"
+      private_key = file("C:/Users/fiifi/my-personal-proj/Pet-Adoption-Auto-Discovery-Project-Oct-2025/files/fiifi-pet-adoption-auto-discovery-key1.pem")
+      timeout     = "5m"
+      agent       = false
+    }
+
+    inline = [
+      "echo 'Updating Jenkins Docker...'",
+      "sudo docker pull jenkins/jenkins:lts",
+      "sudo systemctl restart jenkins"
+    ]
   }
 }

@@ -1,3 +1,8 @@
+variable "vault_token" {
+  description = "Vault token for accessing secrets."
+  type        = string
+  sensitive   = true
+}
 # Database Module - Variable Definitions
 # Input variables for the database module
 

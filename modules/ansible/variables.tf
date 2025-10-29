@@ -26,11 +26,6 @@ variable "bastion_security_group_id" {
   type        = string
 }
 
-variable "private_key_path" {
-  description = "Path to the private key file for SSH connections"
-  type        = string
-  sensitive   = true
-}
 
 variable "nexus_server_ip" {
   description = "IP address of the Nexus repository server"
@@ -64,6 +59,7 @@ variable "volume_size" {
 variable "s3_bucket_name" {
   description = "S3 bucket name for storing Ansible scripts and artifacts"
   type        = string
+  default     = "auto-discovery-fiifi-86"
 }
 
 variable "tags" {

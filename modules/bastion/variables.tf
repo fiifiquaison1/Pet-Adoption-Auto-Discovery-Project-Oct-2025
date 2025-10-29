@@ -21,11 +21,6 @@ variable "keypair" {
   type        = string
 }
 
-variable "private_key" {
-  description = "Private key content for SSH access"
-  type        = string
-  sensitive   = true
-}
 
 variable "nr_license_key" {
   description = "New Relic license key for monitoring"

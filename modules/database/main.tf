@@ -1,8 +1,10 @@
-# Database Module - Main Configuration
-# RDS MySQL database with security group for Pet Adoption Auto Discovery Project
-
 data "vault_generic_secret" "vault_secret" {
   path = "secret/database"
+}
+# Ensure Vault provider is configured for token
+provider "vault" {
+  address = "https://vault.fiifiquaison.space"
+  token   = var.vault_token # or use environment variable VAULT_TOKEN
 }
 
 # RDS Subnet Group

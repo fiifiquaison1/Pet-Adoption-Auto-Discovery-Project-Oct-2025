@@ -66,7 +66,7 @@ A comprehensive infrastructure-as-code project for deploying a secure, scalable 
 ```bash
 # Use existing key pair (recommended for production)
 export TF_VAR_use_existing_keypair=true
-export TF_VAR_existing_keypair_name="your-existing-key"
+export TF_VAR_existing_keypair_name="fiifi-pet-adoption-auto-discovery-key"
 
 # Or use keyless access via AWS Systems Manager
 aws ssm start-session --target <instance-id> --region eu-west-3

@@ -33,3 +33,9 @@ output "bastion_asg_name" {
   description = "Name of the bastion auto scaling group"
   value       = aws_autoscaling_group.bastion-asg.name
 }
+
+# Output: Bastion Security Group
+output "bastion_sg" {
+  description = "Security group ID of the Bastion host"
+  value       = aws_security_group.bastion-sg.id
+}

@@ -98,7 +98,7 @@ resource "aws_instance" "ansible_server" {
   vpc_security_group_ids = [aws_security_group.ansible_sg.id]
   key_name               = var.key_pair_name
   subnet_id              = var.private_subnet_id
-  user_data              = local.ansible_userdata
+  user_data_base64       = local.ansible_userdata
 
   # Security: No public IP (private subnet only)
   associate_public_ip_address = false
@@ -135,6 +135,22 @@ resource "aws_instance" "ansible_server" {
     Purpose     = "ansible-automation"
     Security    = "private-subnet-only"
   })
+  
+  provisioner "remote-exec" {
+    inline = [
+      "echo Hello from Ansible EC2!",
+      "uname -a"
+    ]
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = file("C:/Users/fiifi/my-personal-proj/Pet-Adoption-Auto-Discovery-Project-Oct-2025/files/fiifi-pet-adoption-auto-discovery-key1.pem")
+      host        = self.private_ip
+      timeout     = "5m"
+      agent       = false
+    }
+  }
+  depends_on = [aws_instance.ansible_server]
 }
 
 # Create IAM role for ansible
@@ -242,20 +258,21 @@ resource "null_resource" "ansible_setup" {
 
   provisioner "local-exec" {
     command = <<EOT
-      # Create temporary directory for scripts
-      mkdir -p /tmp/ansible-upload
-      
-      # Copy only necessary files
-      cp ${path.module}/deployment.yml /tmp/ansible-upload/
-      cp ${path.module}/stage-bashscript.sh /tmp/ansible-upload/
-      cp ${path.module}/prod-bashscript.sh /tmp/ansible-upload/
-      
-      # Upload to S3 with versioning
-      aws s3 sync /tmp/ansible-upload/ s3://${var.s3_bucket_name}/ansible-scripts/ --delete
-      
-      # Clean up temporary directory
-      rm -rf /tmp/ansible-upload
+      REM Create temporary directory for scripts
+      mkdir ansible-upload
+
+      REM Copy only necessary files
+      copy "${path.module}\deployment.yml" ansible-upload\
+      copy "${path.module}\stage-bashscript.sh" ansible-upload\
+      copy "${path.module}\prod-bashscript.sh" ansible-upload\
+
+      REM Upload to S3 with versioning
+      aws s3 sync ansible-upload/ s3://${var.s3_bucket_name}/ansible-scripts/ --delete
+
+      REM Clean up temporary directory
+      rmdir /S /Q ansible-upload
     EOT
+    interpreter = ["cmd", "/C"]
   }
 
   # Trigger re-upload when scripts change
