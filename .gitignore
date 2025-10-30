@@ -1,3 +1,5 @@
+# Exclude secret/env setup script
+set-secrets-env.sh
 # Local .terraform directories
 .terraform/
 

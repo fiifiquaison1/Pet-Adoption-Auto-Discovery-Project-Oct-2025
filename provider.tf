@@ -16,5 +16,5 @@ terraform {
 
 provider "vault" {
   address = "https://vault.fiifiquaison.space"
-  token   = "hvs.zuawemqhSXtLuok9Sa7Y7ybh"
+  token   = var.vault_token # or use environment variable VAULT_TOKEN
 }
